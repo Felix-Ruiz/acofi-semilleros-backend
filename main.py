@@ -8,10 +8,18 @@ import os
 def create_app():
     app = Flask(__name__)
     
-    # ⚠️ SOLUCIÓN DEFINITIVA DE CORS: Permite la conexión desde tu nuevo subdominio
-    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    # ⚠️ REGLA DE CORS ESTRICTA: Permite explícitamente tu dominio oficial
+    CORS(app, resources={
+        r"/*": {
+            "origins": [
+                "https://semilleros.acofiapps.com", 
+                "http://localhost:5173",
+                "https://acofi-semilleros-frontend.vercel.app"
+            ]
+        }
+    }, supports_credentials=True)
     
-    # Configuración de la base de datos (Conexión a Supabase)
+    # Configuración de la base de datos
     database_url = os.environ.get(
         'DATABASE_URL', 
         'postgresql+psycopg2://postgres:AcofiSemilleros%23@db.zobctsmkhuzibnlgmfqr.supabase.co:6543/postgres'

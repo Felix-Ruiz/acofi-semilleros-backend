@@ -13,6 +13,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import re
+import threading # NUEVO: Para enviar correos en segundo plano sin colgar el servidor
 
 # =====================================================================
 # ⚠️ DOMINIO DE PRODUCCIÓN
@@ -30,6 +31,7 @@ admin_bp = Blueprint('admin', __name__)
 def generar_pin():
     return ''.join(random.choices(string.digits, k=4))
 
+# --- FUNCIÓN DE ENVÍO INDIVIDUAL CON TIMEOUT ANTI-CUELGUES ---
 def enviar_correo(destinatario, asunto, cuerpo):
     try:
         smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
@@ -41,8 +43,7 @@ def enviar_correo(destinatario, asunto, cuerpo):
         smtp_port = int(port_env) if port_env.isdigit() else 587
 
         if not smtp_user or not smtp_pass:
-            print("ERROR: Faltan credenciales de Brevo en Render.")
-            return False, "Faltan credenciales SMTP (Usuario o Contraseña)."
+            return False, "Faltan credenciales SMTP en Render."
 
         msg = MIMEMultipart()
         msg['From'] = remitente_oficial
@@ -50,7 +51,8 @@ def enviar_correo(destinatario, asunto, cuerpo):
         msg['Subject'] = asunto
         msg.attach(MIMEText(cuerpo, 'html'))
         
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        # TIMEOUT DE 10s: Evita el SIGKILL de Render si Brevo no responde
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_pass)
         server.send_message(msg)
@@ -59,9 +61,65 @@ def enviar_correo(destinatario, asunto, cuerpo):
     except smtplib.SMTPAuthenticationError:
         return False, "Brevo rechazó la contraseña o el usuario SMTP."
     except smtplib.SMTPDataError:
-        return False, f"Brevo bloqueó el envío. Verifica que el dominio y '{remitente_oficial}' estén autenticados en Brevo."
+        return False, f"Brevo bloqueó el envío (Verifica remitente: {remitente_oficial})."
     except Exception as e:
-        return False, f"Error de conexión SMTP: {str(e)}"
+        return False, f"Error de red/SMTP: {str(e)}"
+
+# --- NUEVO: FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO ---
+def proceso_envio_segundo_plano(lista_datos):
+    smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
+    smtp_pass = os.environ.get('MAIL_PASSWORD', '').strip()
+    remitente_oficial = os.environ.get('MAIL_SENDER', smtp_user).strip()
+    smtp_server = os.environ.get('MAIL_SERVER', 'smtp-relay.brevo.com').strip()
+    port_env = os.environ.get('MAIL_PORT', '587').strip()
+    smtp_port = int(port_env) if port_env.isdigit() else 587
+
+    if not smtp_user or not smtp_pass:
+        print("Envío en segundo plano cancelado: Faltan credenciales.")
+        return
+
+    try:
+        # Abre una SOLA conexión para todos, ahorrando memoria y tiempo
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        
+        for datos in lista_datos:
+            try:
+                msg = MIMEMultipart()
+                msg['From'] = remitente_oficial
+                msg['To'] = datos['correo']
+                msg['Subject'] = f"Código QR de Evaluación - Ponencia: {datos['codigo']}"
+                
+                cuerpo_html = f"""
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
+                    <h2 style="color: #1e3a8a;">Hola {datos['nombres']},</h2>
+                    <p>Nos complace informarte que tu proyecto <strong>"{datos['titulo']}"</strong> está listo para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
+                    <p>Tu código de póster asignado es: <strong style="font-size: 18px; color: #1e3a8a;">{datos['codigo']}</strong></p>
+                    
+                    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
+                        <h3 style="margin-top: 0; color: #1e3a8a;">Credencial Digital</h3>
+                        <p style="margin-bottom: 10px;">Para ver tu código QR desde tu celular e ingresar a la plataforma:</p>
+                        <p style="margin-bottom: 15px;">🔗 <strong>Enlace de ingreso:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
+                        <ul style="list-style-type: none; padding-left: 0; margin: 0;">
+                            <li style="margin-bottom: 8px;">👤 <strong>Usuario:</strong> Tu número de documento ({datos['documento']})</li>
+                            <li>🔑 <strong>Contraseña (PIN):</strong> {datos['pin']}</li>
+                        </ul>
+                    </div>
+                    <div style="text-align: center; margin: 20px 0;">
+                        <img src="{datos['url_qr']}" alt="QR Ponencia" style="width:200px; height:200px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;">
+                    </div>
+                    <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
+                </div>
+                """
+                msg.attach(MIMEText(cuerpo_html, 'html'))
+                server.send_message(msg)
+            except Exception as e:
+                print(f"Fallo enviando a {datos['correo']}: {str(e)}")
+                
+        server.quit()
+    except Exception as e:
+        print(f"Error fatal en el hilo de envío masivo: {str(e)}")
 
 def eliminar_qr_cloudinary(url_qr):
     if not url_qr:
@@ -210,7 +268,7 @@ def eliminar_estudiante(id):
         db.session.rollback()
         return jsonify({"error": f"Error al eliminar estudiante: {str(e)}"}), 500
 
-# --- ENVIAR QR A INTEGRANTE INDIVIDUAL ---
+# --- ENVIAR QR A INTEGRANTE INDIVIDUAL (CON TIMEOUT) ---
 @admin_bp.route('/enviar_qr_estudiante/<int:id>', methods=['POST'])
 def enviar_qr_estudiante(id):
     try:
@@ -554,7 +612,7 @@ def exportar_excel(entidad):
     except Exception as e:
         return jsonify({"error": f"Error al generar Excel: {str(e)}"}), 500
 
-# --- ACEPTAR PONENCIA INDIVIDUAL Y GENERAR QR (Ruta local segura) ---
+# --- ACEPTAR PONENCIA INDIVIDUAL Y GENERAR QR ---
 @admin_bp.route('/aceptar_ponencia/<int:id_ponencia>', methods=['POST'])
 def aceptar_ponencia(id_ponencia):
     ponencia = Ponencia.query.get(id_ponencia)
@@ -575,7 +633,6 @@ def aceptar_ponencia(id_ponencia):
         url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
         qr = qrcode.make(url_evaluacion)
         
-        # FIX: Guardado en carpeta de ejecución directa para evitar error de permisos en Render
         ruta_temporal = f"qr_{ponencia.codigo}.png"
         qr.save(ruta_temporal)
         upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
@@ -662,7 +719,6 @@ def cargar_excel():
                 url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
                 qr = qrcode.make(url_evaluacion)
                 
-                # FIX: Guardado en carpeta de ejecución
                 ruta_temporal = f"qr_excel_{ponencia.codigo}.png"
                 qr.save(ruta_temporal)
                 upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
@@ -679,7 +735,7 @@ def cargar_excel():
         db.session.rollback()
         return jsonify({"error": f"Error procesando el archivo. Detalle: {str(e)}"}), 500
 
-# --- ENVÍO DE CORREOS MASIVOS (BLINDADO) ---
+# --- ENVÍO DE CORREOS MASIVOS (USANDO HILOS) ---
 @admin_bp.route('/enviar_qrs', methods=['POST'])
 def enviar_qrs():
     data = request.get_json() or {}
@@ -690,47 +746,28 @@ def enviar_qrs():
         else:
             ponencias = Ponencia.query.filter_by(estado='aceptada').all()
             
-        enviados, errores = 0, 0
-        ultimo_error = "Error desconocido."
-        
+        lista_envio = []
         for p in ponencias:
             integrantes = Estudiante.query.filter_by(nombre_trabajo=p.titulo).all()
             for integrante in integrantes:
-                if not integrante.correo or not p.url_qr:
-                    errores += 1
-                    continue
-                asunto = f"Código QR de Evaluación - Ponencia: {p.codigo}"
-                cuerpo_html = f"""
-                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
-                    <h2 style="color: #1e3a8a;">Hola {integrante.nombres_apellidos},</h2>
-                    <p>Nos complace informarte que tu proyecto <strong>"{p.titulo}"</strong> está listo para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
-                    <p>Tu código de póster asignado es: <strong style="font-size: 18px; color: #1e3a8a;">{p.codigo}</strong></p>
-                    
-                    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
-                        <h3 style="margin-top: 0; color: #1e3a8a;">Credencial Digital</h3>
-                        <p style="margin-bottom: 10px;">Para ver tu código QR desde tu celular e ingresar a la plataforma:</p>
-                        <p style="margin-bottom: 15px;">🔗 <strong>Enlace de ingreso:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
-                        <ul style="list-style-type: none; padding-left: 0; margin: 0;">
-                            <li style="margin-bottom: 8px;">👤 <strong>Usuario:</strong> Tu número de documento ({integrante.documento_identidad})</li>
-                            <li>🔑 <strong>Contraseña (PIN):</strong> {integrante.pin_acceso}</li>
-                        </ul>
-                    </div>
-                    <div style="text-align: center; margin: 20px 0;">
-                        <img src="{p.url_qr}" alt="QR Ponencia" style="width:200px; height:200px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;">
-                    </div>
-                    <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
-                </div>
-                """
-                exito, mensaje = enviar_correo(integrante.correo, asunto, cuerpo_html)
-                if exito: 
-                    enviados += 1
-                else: 
-                    errores += 1
-                    ultimo_error = mensaje
-                
-        if errores > 0 and enviados == 0:
-            return jsonify({"error": f"Fallo total de envío. Detalle SMTP: {ultimo_error}"}), 400
+                if integrante.correo and p.url_qr:
+                    lista_envio.append({
+                        'nombres': integrante.nombres_apellidos,
+                        'correo': integrante.correo,
+                        'documento': integrante.documento_identidad,
+                        'pin': integrante.pin_acceso,
+                        'titulo': p.titulo,
+                        'codigo': p.codigo,
+                        'url_qr': p.url_qr
+                    })
+        
+        if len(lista_envio) == 0:
+            return jsonify({"error": "No hay correos válidos para enviar en las ponencias seleccionadas."}), 400
+
+        # Inicia el proceso en segundo plano y devuelve respuesta inmediata al Frontend
+        hilo = threading.Thread(target=proceso_envio_segundo_plano, args=(lista_envio,))
+        hilo.start()
             
-        return jsonify({"mensaje": f"Proceso finalizado. Enviados: {enviados}. Fallidos: {errores}"}), 200
+        return jsonify({"mensaje": f"El envío masivo a {len(lista_envio)} estudiantes se ha iniciado en segundo plano. Puede continuar usando el sistema."}), 200
     except Exception as e:
-        return jsonify({"error": f"Error al procesar envíos: {str(e)}"}), 500
+        return jsonify({"error": f"Error al iniciar envíos: {str(e)}"}), 500
