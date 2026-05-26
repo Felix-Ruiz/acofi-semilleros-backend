@@ -15,8 +15,8 @@ from email.mime.text import MIMEText
 import re
 
 # =====================================================================
-# ⚠️ IMPORTANTE: PON AQUÍ EL SUBDOMINIO QUE ACABAS DE CREAR EN VERCEL
-DOMINIO_PRODUCCION = "https://semilleros.acofiapp.com" 
+# ⚠️ DOMINIO DE PRODUCCIÓN
+DOMINIO_PRODUCCION = "https://semilleros.acofiapps.com" 
 # =====================================================================
 
 cloudinary.config(
@@ -146,7 +146,6 @@ def editar_estudiante(id):
         estudiante.cargo = data.get('cargo', estudiante.cargo)
         estudiante.nombre_trabajo = data.get('nombre_trabajo', estudiante.nombre_trabajo)
         
-        # Si el estudiante se cambia de proyecto, revisar si el nuevo proyecto ya tiene ponencia
         if antiguo_trabajo != estudiante.nombre_trabajo:
             ponencia_nueva = Ponencia.query.filter_by(titulo=estudiante.nombre_trabajo).first()
             if not ponencia_nueva:
@@ -158,7 +157,7 @@ def editar_estudiante(id):
                     titulo=estudiante.nombre_trabajo,
                     estado='aceptada',
                     estudiante_id=estudiante.id,
-                    codigo=codigo_genergenerated = codigo_generado
+                    codigo=codigo_generado
                 )
                 db.session.add(ponencia_nueva)
                 db.session.flush()
@@ -190,7 +189,6 @@ def eliminar_estudiante(id):
         db.session.delete(estudiante)
         db.session.flush()
         
-        # Si ya no quedan integrantes en ese trabajo, se purga la ponencia completa y su QR
         restantes = Estudiante.query.filter_by(nombre_trabajo=trabajo).count()
         if restantes == 0:
             ponencia = Ponencia.query.filter_by(titulo=trabajo).first()
@@ -546,7 +544,7 @@ def exportar_excel(entidad):
     except Exception as e:
         return jsonify({"error": f"Error al generar Excel: {str(e)}"}), 500
 
-# --- CARGA MASIVA MEDIANTE EXCEL ---
+# --- CARGA MASIVA MEDIANTE EXCEL (AGRUPACIÓN INTELIGENTE) ---
 @admin_bp.route('/cargar_excel', methods=['POST'])
 def cargar_excel():
     if 'file' not in request.files:
@@ -589,7 +587,13 @@ def cargar_excel():
                 db.session.add(estudiante)
                 db.session.flush()
 
-            ponencia = Ponencia.query.filter_by(titulo=titulo).first()
+            ponencia = None
+            if codigo_excel and codigo_excel.lower() != 'nan':
+                ponencia = Ponencia.query.filter_by(codigo=codigo_excel).first()
+            
+            if not ponencia:
+                ponencia = Ponencia.query.filter_by(titulo=titulo).first()
+
             if not ponencia:
                 if codigo_excel and codigo_excel.lower() != 'nan':
                     codigo_final = codigo_excel
@@ -597,8 +601,8 @@ def cargar_excel():
                     while True:
                         codigo_generado = str(random.randint(100, 999))
                         if not Ponencia.query.filter_by(codigo=codigo_generado).first():
+                            codigo_final = codigo_generado
                             break
-                    codigo_final = codigo_generado
                 
                 ponencia = Ponencia(
                     titulo=titulo,
@@ -617,12 +621,14 @@ def cargar_excel():
                 ponencia.url_qr = upload_result.get("secure_url")
                 if os.path.exists(ruta_temporal):
                     os.remove(ruta_temporal)
+            else:
+                estudiante.nombre_trabajo = ponencia.titulo
                     
         db.session.commit()
         return jsonify({"mensaje": "Archivo procesado. Estudiantes agrupados y QRs generados exitosamente."}), 200
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": f"Error procesando el archivo: {str(e)}"}), 500
+        return jsonify({"error": f"Error procesando el archivo. Detalle: {str(e)}"}), 500
 
 # --- ENVÍO DE CORREOS MASIVOS ---
 @admin_bp.route('/enviar_qrs', methods=['POST'])

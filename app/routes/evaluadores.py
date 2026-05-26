@@ -1,15 +1,21 @@
 from flask import Blueprint, request, jsonify
 from app.models import db, Evaluador
+import random
+import string
 
-# Creamos el Blueprint para evaluadores
 evaluadores_bp = Blueprint('evaluadores', __name__)
+
+def generar_pin():
+    return ''.join(random.choices(string.digits, k=4))
 
 @evaluadores_bp.route('/registro', methods=['POST'])
 def registrar_evaluador():
     data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "No se recibieron datos"}), 400
+    
+    # Validar si ya existe el evaluador
+    existente = Evaluador.query.filter_by(documento_identidad=data['documento_identidad']).first()
+    if existente:
+        return jsonify({"error": "El documento ingresado ya se encuentra registrado."}), 400
 
     try:
         nuevo_evaluador = Evaluador(
@@ -18,15 +24,15 @@ def registrar_evaluador():
             institucion=data['institucion'],
             correo=data['correo'],
             cargo=data['cargo'],
-            evento_id=data['evento_id'] # Aquí llegará el ID de la ciudad seleccionada en el formulario
+            evento_id=data['evento_id'],
+            pin_acceso=generar_pin()
         )
         db.session.add(nuevo_evaluador)
         db.session.commit()
 
         return jsonify({
-            "mensaje": "Evaluador registrado exitosamente. Ya puede iniciar sesión para escanear ponencias."
+            "mensaje": f"Registro exitoso. IMPORTANTE: Su PIN de acceso es {nuevo_evaluador.pin_acceso}. Guárdelo para ingresar al sistema."
         }), 201
-
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": f"Error al registrar evaluador: {str(e)}"}), 500
+        return jsonify({"error": f"Error al registrar: {str(e)}"}), 500
