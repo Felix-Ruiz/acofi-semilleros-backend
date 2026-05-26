@@ -23,10 +23,10 @@ class Estudiante(db.Model):
     documento_identidad = db.Column(db.String(50), unique=True, nullable=False)
     institucion = db.Column(db.String(200), nullable=False)
     correo = db.Column(db.String(120), unique=True, nullable=False)
-    ciudad = db.Column(db.String(100), nullable=False) # Aquí se guarda la ciudad o la "Otra" escrita
+    ciudad = db.Column(db.String(100), nullable=False)
     cargo = db.Column(db.String(50), nullable=False)
     nombre_trabajo = db.Column(db.String(300), nullable=False)
-    pin_acceso = db.Column(db.String(20), nullable=True) # NUEVO: Para el inicio de sesión
+    pin_acceso = db.Column(db.String(20), nullable=True)
     ponencia = db.relationship('Ponencia', backref='estudiante', uselist=False)
 
 class Evaluador(db.Model):
@@ -38,7 +38,7 @@ class Evaluador(db.Model):
     correo = db.Column(db.String(120), unique=True, nullable=False)
     cargo = db.Column(db.String(100), nullable=False)
     evento_id = db.Column(db.Integer, db.ForeignKey('eventos.id'), nullable=False)
-    pin_acceso = db.Column(db.String(20), nullable=True) # NUEVO: Para el inicio de sesión
+    pin_acceso = db.Column(db.String(20), nullable=True)
     evaluaciones = db.relationship('Evaluacion', backref='evaluador', lazy=True)
 
 class Ponencia(db.Model):
@@ -56,5 +56,11 @@ class Evaluacion(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     ponencia_id = db.Column(db.Integer, db.ForeignKey('ponencias.id'), nullable=False)
     evaluador_id = db.Column(db.Integer, db.ForeignKey('evaluadores.id'), nullable=False)
-    respuestas_rubrica = db.Column(db.JSON, nullable=False) # Aquí guardaremos las respuestas de la evaluación
+    respuestas_rubrica = db.Column(db.JSON, nullable=False)
     fecha_evaluacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Configuracion(db.Model):
+    __tablename__ = 'configuraciones'
+    id = db.Column(db.Integer, primary_key=True)
+    clave = db.Column(db.String(50), unique=True, nullable=False)
+    valor = db.Column(db.String(100), nullable=False)

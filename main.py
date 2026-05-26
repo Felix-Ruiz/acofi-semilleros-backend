@@ -1,15 +1,14 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from app.models import db, Evento, Estudiante, Evaluador, Administrador
+from app.models import db, Evento, Estudiante, Evaluador, Administrador, Configuracion
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
 
 def create_app():
     app = Flask(__name__)
-    CORS(app) # Permite que el Frontend (React) se comunique con este Backend
+    CORS(app)
     
-    # Configuración de la base de datos (Conexión a Supabase / PostgreSQL)
     database_url = os.environ.get(
         'DATABASE_URL', 
         'postgresql+psycopg2://postgres:AcofiSemilleros%23@db.zobctsmkhuzibnlgmfqr.supabase.co:6543/postgres'
@@ -20,18 +19,15 @@ def create_app():
     
     db.init_app(app)
     
-    # Crea las tablas en la base de datos si no existen y siembra datos iniciales
     with app.app_context():
-        db.create_all() # ¡Esto creará las tablas directamente en Supabase!
+        db.create_all()
         
-        # Validación para crear los 3 eventos iniciales automáticamente si la tabla está vacía
         if Evento.query.count() == 0:
             eventos_predeterminados = [
                 {"nombre": "Barranquilla, Atlántico", "fecha": "2026-05-15"},
                 {"nombre": "Bogotá, Distrito Capital", "fecha": "2026-05-22"},
                 {"nombre": "Pereira, Risaralda", "fecha": "2026-05-29"}
             ]
-            
             for ev in eventos_predeterminados:
                 nuevo_evento = Evento(
                     nombre=ev["nombre"],
@@ -40,7 +36,6 @@ def create_app():
                 db.session.add(nuevo_evento)
             db.session.commit()
 
-        # NUEVO: Siembra automática del Administrador inicial si la tabla está vacía
         if Administrador.query.count() == 0:
             admin_defecto = Administrador(
                 correo="admin@acofi.com",
@@ -48,8 +43,13 @@ def create_app():
             )
             db.session.add(admin_defecto)
             db.session.commit()
+
+        # Siembra de la configuración de inscripciones
+        if Configuracion.query.filter_by(clave='registro_abierto').first() is None:
+            config_registro = Configuracion(clave='registro_abierto', valor='true')
+            db.session.add(config_registro)
+            db.session.commit()
         
-    # --- Registro de Rutas (Blueprints) ---
     from app.routes.estudiantes import estudiantes_bp
     from app.routes.eventos import eventos_bp
     from app.routes.evaluadores import evaluadores_bp
@@ -66,7 +66,6 @@ def create_app():
     def index():
         return jsonify({"mensaje": "¡Backend del Encuentro de Semilleros funcionando correctamente!"})
 
-    # --- ENDPOINT DE LOGIN UNIFICADO (SOPORTA CORREO/PASSWORD Y DOCUMENTO/PIN) ---
     @app.route('/api/login', methods=['POST'])
     def login():
         data = request.get_json()
@@ -75,7 +74,6 @@ def create_app():
         documento = data.get('documento')
         pin = data.get('pin')
 
-        # 1. Intento de inicio de sesión como Administrador
         if correo and password:
             admin = Administrador.query.filter_by(correo=correo).first()
             if admin and check_password_hash(admin.password_hash, password):
@@ -87,7 +85,6 @@ def create_app():
                 }), 200
             return jsonify({"error": "Correo electrónico o contraseña incorrectos."}), 401
 
-        # 2. Intento de inicio de sesión como Evaluador o Estudiante
         if not documento or not pin:
             return jsonify({"error": "Credenciales incompletas."}), 400
 
