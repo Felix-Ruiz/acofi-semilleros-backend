@@ -26,6 +26,7 @@ class Estudiante(db.Model):
     ciudad = db.Column(db.String(100), nullable=False) # Aquí se guarda la ciudad o la "Otra" escrita
     cargo = db.Column(db.String(50), nullable=False)
     nombre_trabajo = db.Column(db.String(300), nullable=False)
+    pin_acceso = db.Column(db.String(20), nullable=True) # NUEVO: Para el inicio de sesión
     ponencia = db.relationship('Ponencia', backref='estudiante', uselist=False)
 
 class Evaluador(db.Model):
@@ -37,6 +38,7 @@ class Evaluador(db.Model):
     correo = db.Column(db.String(120), unique=True, nullable=False)
     cargo = db.Column(db.String(100), nullable=False)
     evento_id = db.Column(db.Integer, db.ForeignKey('eventos.id'), nullable=False)
+    pin_acceso = db.Column(db.String(20), nullable=True) # NUEVO: Para el inicio de sesión
     evaluaciones = db.relationship('Evaluacion', backref='evaluador', lazy=True)
 
 class Ponencia(db.Model):

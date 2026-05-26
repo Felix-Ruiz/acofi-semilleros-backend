@@ -3,10 +3,57 @@ from app.models import db, Ponencia, Estudiante, Evaluador, Evaluacion
 import qrcode
 import os
 import random
+import string
 import io
+import pandas as pd
 from openpyxl import Workbook
+import cloudinary
+import cloudinary.uploader
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+# Configuración de Cloudinary (Asegúrate de tener estas variables en Render)
+cloudinary.config(
+    cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME'),
+    api_key=os.getenv('CLOUDINARY_API_KEY'),
+    api_secret=os.getenv('CLOUDINARY_API_SECRET')
+)
 
 admin_bp = Blueprint('admin', __name__)
+
+# --- FUNCIONES AUXILIARES ---
+def generar_pin():
+    """Genera un PIN aleatorio de 4 dígitos"""
+    return ''.join(random.choices(string.digits, k=4))
+
+def enviar_correo(destinatario, asunto, cuerpo):
+    """Función básica para enviar correos usando SMTP (Ej: Gmail, Outlook)"""
+    remitente = os.getenv('MAIL_USERNAME')
+    password = os.getenv('MAIL_PASSWORD')
+    smtp_server = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
+    smtp_port = int(os.getenv('MAIL_PORT', 587))
+
+    if not remitente or not password:
+        print("Credenciales de correo no configuradas.")
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = remitente
+        msg['To'] = destinatario
+        msg['Subject'] = asunto
+        msg.attach(MIMEText(cuerpo, 'html'))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(remitente, password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error enviando correo a {destinatario}: {e}")
+        return False
 
 # --- LEER PONENCIAS ---
 @admin_bp.route('/ponencias', methods=['GET'])
@@ -27,7 +74,8 @@ def obtener_ponencias():
                 "estudiante_institucion": p.estudiante.institucion if p.estudiante else "",
                 "estudiante_correo": p.estudiante.correo if p.estudiante else "",
                 "estudiante_ciudad": p.estudiante.ciudad if p.estudiante else "",
-                "estudiante_cargo": p.estudiante.cargo if p.estudiante else ""
+                "estudiante_cargo": p.estudiante.cargo if p.estudiante else "",
+                "estudiante_pin": p.estudiante.pin_acceso if p.estudiante else ""
             })
         return jsonify(resultado), 200
     except Exception as e:
@@ -38,7 +86,6 @@ def obtener_ponencias():
 def crear_ponencia_admin():
     data = request.get_json()
     try:
-        # Primero creamos al estudiante asociado
         nuevo_estudiante = Estudiante(
             nombres_apellidos=data['estudiante_nombre'],
             documento_identidad=data['estudiante_documento'],
@@ -46,10 +93,11 @@ def crear_ponencia_admin():
             correo=data['estudiante_correo'],
             ciudad=data['estudiante_ciudad'],
             cargo=data['estudiante_cargo'],
-            nombre_trabajo=data['titulo'] # El trabajo representa el título
+            nombre_trabajo=data['titulo'],
+            pin_acceso=generar_pin()
         )
         db.session.add(nuevo_estudiante)
-        db.session.flush() # Para obtener el ID del estudiante inmediatamente
+        db.session.flush()
 
         nueva_ponencia = Ponencia(
             titulo=data['titulo'],
@@ -58,7 +106,7 @@ def crear_ponencia_admin():
         )
         db.session.add(nueva_ponencia)
         db.session.commit()
-        return jsonify({"mensaje": "Ponencia y ponente creados con éxito desde administración"}), 201
+        return jsonify({"mensaje": "Ponencia y ponente creados con éxito desde administración", "pin": nuevo_estudiante.pin_acceso}), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error al crear: {str(e)}"}), 500
@@ -104,7 +152,8 @@ def obtener_evaluadores():
                 "correo": e.correo,
                 "cargo": e.cargo,
                 "evento_id": e.evento_id,
-                "evento": e.evento.nombre if e.evento else "N/A"
+                "evento": e.evento.nombre if e.evento else "N/A",
+                "pin_acceso": e.pin_acceso
             })
         return jsonify(resultado), 200
     except Exception as e:
@@ -121,11 +170,12 @@ def crear_evaluador_admin():
             institucion=data['institucion'],
             correo=data['correo'],
             cargo=data['cargo'],
-            evento_id=int(data['evento_id'])
+            evento_id=int(data['evento_id']),
+            pin_acceso=generar_pin()
         )
         db.session.add(nuevo_evaluador)
         db.session.commit()
-        return jsonify({"mensaje": "Evaluador creado con éxito"}), 201
+        return jsonify({"mensaje": "Evaluador creado con éxito", "pin": nuevo_evaluador.pin_acceso}), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error al crear evaluador: {str(e)}"}), 500
@@ -232,17 +282,17 @@ def exportar_excel(entidad):
         if entidad == 'estudiantes':
             ws.title = "Estudiantes"
             estudiantes = Estudiante.query.all()
-            ws.append(['ID', 'Nombres y Apellidos', 'Documento', 'Institución', 'Correo', 'Ciudad', 'Cargo', 'Nombre del Trabajo'])
+            ws.append(['ID', 'Nombres y Apellidos', 'Documento', 'Institución', 'Correo', 'Ciudad', 'Cargo', 'Nombre del Trabajo', 'PIN'])
             for e in estudiantes:
-                ws.append([e.id, e.nombres_apellidos, e.documento_identidad, e.institucion, e.correo, e.ciudad, e.cargo, e.nombre_trabajo])
+                ws.append([e.id, e.nombres_apellidos, e.documento_identidad, e.institucion, e.correo, e.ciudad, e.cargo, e.nombre_trabajo, e.pin_acceso])
             filename = "Listado_Estudiantes.xlsx"
             
         elif entidad == 'evaluadores':
             ws.title = "Evaluadores"
             evaluadores = Evaluador.query.all()
-            ws.append(['ID', 'Nombres y Apellidos', 'Documento', 'Institución', 'Correo', 'Cargo', 'Evento'])
+            ws.append(['ID', 'Nombres y Apellidos', 'Documento', 'Institución', 'Correo', 'Cargo', 'Evento', 'PIN'])
             for e in evaluadores:
-                ws.append([e.id, e.nombres_apellidos, e.documento_identidad, e.institucion, e.correo, e.cargo, e.evento.nombre if e.evento else ''])
+                ws.append([e.id, e.nombres_apellidos, e.documento_identidad, e.institucion, e.correo, e.cargo, e.evento.nombre if e.evento else '', e.pin_acceso])
             filename = "Listado_Evaluadores.xlsx"
             
         elif entidad == 'ponencias':
@@ -284,35 +334,169 @@ def exportar_excel(entidad):
     except Exception as e:
         return jsonify({"error": f"Error al generar Excel: {str(e)}"}), 500
 
-# --- ACEPTAR PONENCIA Y GENERAR QR ---
+# --- ACEPTAR PONENCIA Y GENERAR QR CON CLOUDINARY ---
 @admin_bp.route('/aceptar_ponencia/<int:id_ponencia>', methods=['POST'])
 def aceptar_ponencia(id_ponencia):
     ponencia = Ponencia.query.get(id_ponencia)
     if not ponencia:
         return jsonify({"error": "Ponencia no encontrada"}), 404
-    if ponencia.estado == 'aceptada':
-        return jsonify({"mensaje": "La ponencia ya estaba aceptada"}), 400
+    
+    if ponencia.estado == 'aceptada' and ponencia.url_qr:
+        return jsonify({"mensaje": "La ponencia ya estaba aceptada y el QR está disponible", "codigo_asignado": ponencia.codigo}), 200
 
     try:
         ponencia.estado = 'aceptada'
-        while True:
-            codigo_generado = str(random.randint(100, 999))
-            existe = Ponencia.query.filter_by(codigo=codigo_generado).first()
-            if not existe:
-                ponencia.codigo = codigo_generado
-                break
         
-        url_evaluacion = f"https://subdominio.acofiapps.com/evaluar/{ponencia.codigo}"
+        # Generar código si no tiene
+        if not ponencia.codigo:
+            while True:
+                codigo_generado = str(random.randint(100, 999))
+                existe = Ponencia.query.filter_by(codigo=codigo_generado).first()
+                if not existe:
+                    ponencia.codigo = codigo_generado
+                    break
+        
+        # Generar el QR
+        origen_frontend = "https://acofi-semilleros.vercel.app"
+        url_evaluacion = f"{origen_frontend}/evaluar/{ponencia.codigo}"
+        
         qr = qrcode.make(url_evaluacion)
-        ruta_qrs = os.path.join(os.getcwd(), 'static', 'qrs')
-        os.makedirs(ruta_qrs, exist_ok=True)
-        nombre_archivo_qr = f"qr_ponencia_{ponencia.codigo}.png"
-        ruta_completa_qr = os.path.join(ruta_qrs, nombre_archivo_qr)
-        qr.save(ruta_completa_qr)
+        ruta_temporal = f"/tmp/qr_ponencia_{ponencia.codigo}.png"
+        qr.save(ruta_temporal)
         
-        ponencia.url_qr = f"/static/qrs/{nombre_archivo_qr}"
+        # Subir a Cloudinary para almacenamiento permanente
+        upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
+        ponencia.url_qr = upload_result.get("secure_url")
+        
+        # Eliminar archivo temporal local
+        if os.path.exists(ruta_temporal):
+            os.remove(ruta_temporal)
+            
         db.session.commit()
-        return jsonify({"mensaje": "Ponencia aceptada con éxito", "codigo_asignado": ponencia.codigo, "url_qr": ponencia.url_qr}), 200
+        return jsonify({"mensaje": "Ponencia aceptada y QR generado con éxito", "codigo_asignado": ponencia.codigo, "url_qr": ponencia.url_qr}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error al procesar la ponencia: {str(e)}"}), 500
+
+# --- CARGA MASIVA MEDIANTE EXCEL/CSV ---
+@admin_bp.route('/cargar_excel', methods=['POST'])
+def cargar_excel():
+    if 'file' not in request.files:
+        return jsonify({"error": "No se proporcionó ningún archivo"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Archivo vacío"}), 400
+
+    try:
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(file)
+        else:
+            df = pd.read_excel(file)
+
+        # Iterar sobre las filas del DataFrame
+        for index, row in df.iterrows():
+            nombres = str(row.get('Nombre Estudiante 1', '')).strip()
+            documento = str(row.get('Documento Estudiante 1', '')).strip()
+            institucion = str(row.get('Institución Estudiante 1', '')).strip()
+            correo = str(row.get('Correo estudiante 1', '')).strip()
+            ciudad = str(row.get('Sede del Encuentro', '')).strip()
+            titulo = str(row.get('Nombre del trabajo', '')).strip()
+
+            if not nombres or nombres.lower() == 'nan':
+                continue
+
+            # Buscar o crear estudiante
+            estudiante = Estudiante.query.filter_by(documento_identidad=documento).first()
+            if not estudiante:
+                estudiante = Estudiante(
+                    nombres_apellidos=nombres,
+                    documento_identidad=documento,
+                    institucion=institucion,
+                    correo=correo,
+                    ciudad=ciudad,
+                    cargo='Estudiante 1',
+                    nombre_trabajo=titulo,
+                    pin_acceso=generar_pin()
+                )
+                db.session.add(estudiante)
+                db.session.flush()
+
+            # Buscar o crear ponencia
+            ponencia = Ponencia.query.filter_by(estudiante_id=estudiante.id).first()
+            if not ponencia:
+                # Generar código único
+                while True:
+                    codigo_generado = str(random.randint(100, 999))
+                    if not Ponencia.query.filter_by(codigo=codigo_generado).first():
+                        break
+
+                ponencia = Ponencia(
+                    titulo=titulo,
+                    estado='aceptada',
+                    estudiante_id=estudiante.id,
+                    codigo=codigo_generado
+                )
+                db.session.add(ponencia)
+                db.session.flush()
+
+                # Generar QR y subir a Cloudinary
+                origen_frontend = "https://acofi-semilleros.vercel.app"
+                url_evaluacion = f"{origen_frontend}/evaluar/{ponencia.codigo}"
+                qr = qrcode.make(url_evaluacion)
+                ruta_temporal = f"/tmp/qr_ponencia_{ponencia.codigo}.png"
+                qr.save(ruta_temporal)
+                
+                upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
+                ponencia.url_qr = upload_result.get("secure_url")
+                
+                if os.path.exists(ruta_temporal):
+                    os.remove(ruta_temporal)
+
+        db.session.commit()
+        return jsonify({"mensaje": "Archivo procesado y datos cargados exitosamente"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Error procesando el archivo: {str(e)}"}), 500
+
+# --- ENVÍO DE CORREOS CON QR ---
+@admin_bp.route('/enviar_qrs', methods=['POST'])
+def enviar_qrs():
+    data = request.get_json() or {}
+    id_ponencia = data.get('id_ponencia') # Si viene un ID, se envía individual, sino a todos
+
+    try:
+        if id_ponencia:
+            ponencias = Ponencia.query.filter_by(id=id_ponencia, estado='aceptada').all()
+        else:
+            ponencias = Ponencia.query.filter_by(estado='aceptada').all()
+
+        enviados = 0
+        errores = 0
+
+        for p in ponencias:
+            if not p.estudiante or not p.url_qr or not p.estudiante.correo:
+                errores += 1
+                continue
+
+            asunto = f"Código QR de Evaluación - Ponencia: {p.codigo}"
+            cuerpo_html = f"""
+            <h2>Hola {p.estudiante.nombres_apellidos},</h2>
+            <p>Tu ponencia <strong>"{p.titulo}"</strong> ha sido aceptada.</p>
+            <p>Tu código de ponencia es: <strong>{p.codigo}</strong></p>
+            <p>Tu PIN de acceso al sistema es: <strong>{p.estudiante.pin_acceso}</strong></p>
+            <p>Por favor, descarga el siguiente código QR o presenta tu código a los evaluadores:</p>
+            <img src="{p.url_qr}" alt="QR Ponencia" style="width:200px; height:200px;">
+            <br>
+            <p>Saludos,<br>Comité Organizador ACOFI</p>
+            """
+            
+            exito = enviar_correo(p.estudiante.correo, asunto, cuerpo_html)
+            if exito:
+                enviados += 1
+            else:
+                errores += 1
+
+        return jsonify({"mensaje": f"Proceso finalizado. Enviados: {enviados}, Errores: {errores}"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Error al procesar envíos: {str(e)}"}), 500

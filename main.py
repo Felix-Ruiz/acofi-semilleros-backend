@@ -1,6 +1,7 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from app.models import db, Evento
+from app.models import db, Evento, Estudiante, Evaluador, Administrador
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
 
@@ -9,10 +10,9 @@ def create_app():
     CORS(app) # Permite que el Frontend (React) se comunique con este Backend
     
     # Configuración de la base de datos (Conexión a Supabase / PostgreSQL)
-    # Nota: El símbolo '#' en la contraseña se codifica como '%23' para evitar errores de lectura en la URL
     database_url = os.environ.get(
         'DATABASE_URL', 
-        'postgresql+psycopg2://postgres:AcofiSemilleros%23@db.zobctsmkhuzibnlgmfqr.supabase.co:5432/postgres'
+        'postgresql+psycopg2://postgres:AcofiSemilleros%23@db.zobctsmkhuzibnlgmfqr.supabase.co:6543/postgres'
     )
     
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -38,7 +38,15 @@ def create_app():
                     fecha=datetime.strptime(ev["fecha"], "%Y-%m-%d").date()
                 )
                 db.session.add(nuevo_evento)
-            
+            db.session.commit()
+
+        # NUEVO: Siembra automática del Administrador inicial si la tabla está vacía
+        if Administrador.query.count() == 0:
+            admin_defecto = Administrador(
+                correo="admin@acofi.com",
+                password_hash=generate_password_hash("AcofiAdmin2026#")
+            )
+            db.session.add(admin_defecto)
             db.session.commit()
         
     # --- Registro de Rutas (Blueprints) ---
@@ -57,10 +65,54 @@ def create_app():
     @app.route('/')
     def index():
         return jsonify({"mensaje": "¡Backend del Encuentro de Semilleros funcionando correctamente!"})
+
+    # --- ENDPOINT DE LOGIN UNIFICADO (SOPORTA CORREO/PASSWORD Y DOCUMENTO/PIN) ---
+    @app.route('/api/login', methods=['POST'])
+    def login():
+        data = request.get_json()
+        correo = data.get('correo')
+        password = data.get('password')
+        documento = data.get('documento')
+        pin = data.get('pin')
+
+        # 1. Intento de inicio de sesión como Administrador
+        if correo and password:
+            admin = Administrador.query.filter_by(correo=correo).first()
+            if admin and check_password_hash(admin.password_hash, password):
+                return jsonify({
+                    "mensaje": "Inicio de sesión de administrador exitoso",
+                    "tipo_usuario": "admin",
+                    "id": admin.id,
+                    "nombre": "Administrador General"
+                }), 200
+            return jsonify({"error": "Correo electrónico o contraseña incorrectos."}), 401
+
+        # 2. Intento de inicio de sesión como Evaluador o Estudiante
+        if not documento or not pin:
+            return jsonify({"error": "Credenciales incompletas."}), 400
+
+        evaluador = Evaluador.query.filter_by(documento_identidad=documento, pin_acceso=pin).first()
+        if evaluador:
+            return jsonify({
+                "mensaje": "Inicio de sesión exitoso",
+                "tipo_usuario": "evaluador",
+                "id": evaluador.id,
+                "nombre": evaluador.nombres_apellidos
+            }), 200
+
+        estudiante = Estudiante.query.filter_by(documento_identidad=documento, pin_acceso=pin).first()
+        if estudiante:
+            return jsonify({
+                "mensaje": "Inicio de sesión exitoso",
+                "tipo_usuario": "estudiante",
+                "id": estudiante.id,
+                "nombre": estudiante.nombres_apellidos
+            }), 200
+
+        return jsonify({"error": "Número de documento o PIN incorrectos."}), 401
         
     return app
 
 if __name__ == '__main__':
     app = create_app()
-    # Inicia el servidor en el puerto 5000
     app.run(debug=True, port=5000)
