@@ -13,6 +13,11 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+# =====================================================================
+# ⚠️ IMPORTANTE: CAMBIA ESTO POR EL DOMINIO FINAL DE LA PLATAFORMA ⚠️
+DOMINIO_PRODUCCION = "https://semilleros.acofiapps.com" # Ej: "https://semillero.acofi.com"
+# =====================================================================
+
 cloudinary.config(
     cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME'),
     api_key=os.getenv('CLOUDINARY_API_KEY'),
@@ -71,7 +76,6 @@ def obtener_perfil_estudiante(estudiante_id):
         estudiante = Estudiante.query.get(estudiante_id)
         if not estudiante:
             return jsonify({"error": "Estudiante no encontrado"}), 404
-        # Buscar la ponencia por el nombre del trabajo para soportar grupos
         ponencia = Ponencia.query.filter_by(titulo=estudiante.nombre_trabajo).first()
         return jsonify({
             "id": estudiante.id,
@@ -87,7 +91,7 @@ def obtener_perfil_estudiante(estudiante_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- NUEVO: LEER TODOS LOS ESTUDIANTES ---
+# --- LEER TODOS LOS ESTUDIANTES ---
 @admin_bp.route('/estudiantes', methods=['GET'])
 def obtener_estudiantes():
     try:
@@ -109,14 +113,13 @@ def obtener_estudiantes():
     except Exception as e:
         return jsonify({"error": f"Error al cargar estudiantes: {str(e)}"}), 500
 
-# --- LEER PONENCIAS (AHORA AGRUPANDO INTEGRANTES) ---
+# --- LEER PONENCIAS (AGRUPANDO INTEGRANTES) ---
 @admin_bp.route('/ponencias', methods=['GET'])
 def obtener_ponencias():
     try:
         ponencias = Ponencia.query.all()
         resultado = []
         for p in ponencias:
-            # Buscar a todos los estudiantes que tengan este mismo título de trabajo
             integrantes_db = Estudiante.query.filter_by(nombre_trabajo=p.titulo).all()
             nombres_integrantes = " | ".join([i.nombres_apellidos for i in integrantes_db])
             
@@ -153,7 +156,6 @@ def crear_ponencia_admin():
         db.session.add(nuevo_estudiante)
         db.session.flush()
 
-        # Verificar si la ponencia ya existe
         ponencia_existente = Ponencia.query.filter_by(titulo=data['titulo']).first()
         if not ponencia_existente:
             nueva_ponencia = Ponencia(
@@ -291,7 +293,7 @@ def obtener_ranking():
     except Exception as e:
         return jsonify({"error": f"Error al calcular ranking: {str(e)}"}), 500
 
-# --- ELIMINAR PONENCIAS Y EVALUADORES ---
+# --- ELIMINAR INDIVIDUAL ---
 @admin_bp.route('/ponencias/<int:id>', methods=['DELETE'])
 def eliminar_ponencia(id):
     try:
@@ -324,6 +326,26 @@ def eliminar_evaluador(id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error al eliminar: {str(e)}"}), 500
+
+# --- NUEVO: ELIMINAR TODOS ---
+@admin_bp.route('/borrar_todos/<entidad>', methods=['DELETE'])
+def borrar_todos(entidad):
+    try:
+        if entidad == 'ponencias':
+            Evaluacion.query.delete()
+            Ponencia.query.delete()
+            Estudiante.query.delete()
+        elif entidad == 'evaluadores':
+            Evaluacion.query.delete()
+            Evaluador.query.delete()
+        else:
+            return jsonify({"error": "Entidad no válida"}), 400
+        
+        db.session.commit()
+        return jsonify({"mensaje": f"Todos los registros de {entidad} han sido eliminados correctamente."}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Error al vaciar registros: {str(e)}"}), 500
 
 # --- EXPORTAR A EXCEL ---
 @admin_bp.route('/exportar/<entidad>', methods=['GET'])
@@ -384,7 +406,7 @@ def exportar_excel(entidad):
     except Exception as e:
         return jsonify({"error": f"Error al generar Excel: {str(e)}"}), 500
 
-# --- ACEPTAR PONENCIA Y GENERAR QR CON CLOUDINARY ---
+# --- ACEPTAR PONENCIA INDIVIDUAL Y GENERAR QR ---
 @admin_bp.route('/aceptar_ponencia/<int:id_ponencia>', methods=['POST'])
 def aceptar_ponencia(id_ponencia):
     ponencia = Ponencia.query.get(id_ponencia)
@@ -401,8 +423,8 @@ def aceptar_ponencia(id_ponencia):
                 if not existe:
                     ponencia.codigo = codigo_generado
                     break
-        origen_frontend = "https://acofi-semilleros.vercel.app"
-        url_evaluacion = f"{origen_frontend}/evaluar/{ponencia.codigo}"
+                    
+        url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
         qr = qrcode.make(url_evaluacion)
         ruta_temporal = f"/tmp/qr_ponencia_{ponencia.codigo}.png"
         qr.save(ruta_temporal)
@@ -416,7 +438,7 @@ def aceptar_ponencia(id_ponencia):
         db.session.rollback()
         return jsonify({"error": f"Error al procesar la ponencia: {str(e)}"}), 500
 
-# --- CARGA MASIVA MEDIANTE EXCEL (CORREGIDA CON COLUMNAS REALES Y GRUPOS) ---
+# --- CARGA MASIVA MEDIANTE EXCEL (RESPETANDO CÓDIGO DEL EXCEL) ---
 @admin_bp.route('/cargar_excel', methods=['POST'])
 def cargar_excel():
     if 'file' not in request.files:
@@ -431,7 +453,6 @@ def cargar_excel():
             df = pd.read_excel(file)
 
         for index, row in df.iterrows():
-            # Columnas EXACTAS según tu archivo
             nombres = str(row.get('Nombre y apellidos', '')).strip()
             documento = str(row.get('Número de documento de identidad', '')).strip()
             institucion = str(row.get('Institución', '')).strip()
@@ -439,11 +460,13 @@ def cargar_excel():
             ciudad = str(row.get('Ciudad', '')).strip()
             cargo = str(row.get('Cargo', '')).strip()
             titulo = str(row.get('Nombre del trabajo que representa (debe ser el mismo enviado en la carta de notificación del paso a la tercera fase).', '')).strip()
+            
+            # Buscar la columna 'Código' o 'Codigo' en el excel
+            codigo_excel = str(row.get('Código', row.get('Codigo', ''))).strip()
 
             if not nombres or nombres.lower() == 'nan':
                 continue
 
-            # Crear o actualizar estudiante
             estudiante = Estudiante.query.filter_by(documento_identidad=documento).first()
             if not estudiante:
                 estudiante = Estudiante(
@@ -459,26 +482,28 @@ def cargar_excel():
                 db.session.add(estudiante)
                 db.session.flush()
 
-            # LÓGICA DE GRUPO: Revisamos si ya existe una ponencia con este título
             ponencia = Ponencia.query.filter_by(titulo=titulo).first()
             if not ponencia:
-                # Si no existe, creamos la ponencia y generamos su QR
-                while True:
-                    codigo_generado = str(random.randint(100, 999))
-                    if not Ponencia.query.filter_by(codigo=codigo_generado).first():
-                        break
+                # Validar si usar el código del excel o generar uno
+                if codigo_excel and codigo_excel.lower() != 'nan':
+                    codigo_final = codigo_excel
+                else:
+                    while True:
+                        codigo_generado = str(random.randint(100, 999))
+                        if not Ponencia.query.filter_by(codigo=codigo_generado).first():
+                            break
+                    codigo_final = codigo_generado
                 
                 ponencia = Ponencia(
                     titulo=titulo,
                     estado='aceptada',
                     estudiante_id=estudiante.id,
-                    codigo=codigo_generado
+                    codigo=codigo_final
                 )
                 db.session.add(ponencia)
                 db.session.flush()
 
-                origen_frontend = "https://acofi-semilleros.vercel.app"
-                url_evaluacion = f"{origen_frontend}/evaluar/{ponencia.codigo}"
+                url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
                 qr = qrcode.make(url_evaluacion)
                 ruta_temporal = f"/tmp/qr_ponencia_{ponencia.codigo}.png"
                 qr.save(ruta_temporal)
@@ -488,12 +513,12 @@ def cargar_excel():
                     os.remove(ruta_temporal)
                     
         db.session.commit()
-        return jsonify({"mensaje": "Archivo procesado. Estudiantes agrupados por ponencia exitosamente."}), 200
+        return jsonify({"mensaje": "Archivo procesado. Estudiantes agrupados y QRs generados exitosamente."}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error procesando el archivo: {str(e)}"}), 500
 
-# --- ENVÍO DE CORREOS CON QR ---
+# --- ENVÍO DE CORREOS CON QR Y PIN INCLUIDO ---
 @admin_bp.route('/enviar_qrs', methods=['POST'])
 def enviar_qrs():
     data = request.get_json() or {}
@@ -506,7 +531,6 @@ def enviar_qrs():
             
         enviados, errores = 0, 0
         for p in ponencias:
-            # Ahora enviamos correo a TODOS los integrantes de esa ponencia
             integrantes = Estudiante.query.filter_by(nombre_trabajo=p.titulo).all()
             for integrante in integrantes:
                 if not integrante.correo or not p.url_qr:
@@ -514,19 +538,33 @@ def enviar_qrs():
                     continue
                 asunto = f"Código QR de Evaluación - Ponencia: {p.codigo}"
                 cuerpo_html = f"""
-                <h2>Hola {integrante.nombres_apellidos},</h2>
-                <p>Tu ponencia <strong>"{p.titulo}"</strong> ha sido aceptada.</p>
-                <p>Tu código de ponencia es: <strong>{p.codigo}</strong></p>
-                <p>Tu PIN de acceso al sistema es: <strong>{integrante.pin_acceso}</strong></p>
-                <p>Por favor, descarga el siguiente código QR o presenta tu código a los evaluadores:</p>
-                <img src="{p.url_qr}" alt="QR Ponencia" style="width:200px; height:200px;">
-                <br>
-                <p>Saludos,<br>Comité Organizador ACOFI</p>
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
+                    <h2 style="color: #1e3a8a;">Hola {integrante.nombres_apellidos},</h2>
+                    <p>Nos complace informarte que tu proyecto <strong>"{p.titulo}"</strong> está listo para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
+                    <p>Tu código de póster asignado es: <strong style="font-size: 18px; color: #1e3a8a;">{p.codigo}</strong></p>
+                    
+                    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
+                        <h3 style="margin-top: 0; color: #1e3a8a;">Credencial Digital</h3>
+                        <p style="margin-bottom: 10px;">Para ver tu código QR desde tu celular y presentarlo el día del evento, ingresa a nuestra plataforma:</p>
+                        <p style="margin-bottom: 15px;">🔗 <strong>Enlace de ingreso:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
+                        <ul style="list-style-type: none; padding-left: 0; margin: 0;">
+                            <li style="margin-bottom: 8px;">👤 <strong>Usuario:</strong> Tu número de documento ({integrante.documento_identidad})</li>
+                            <li>🔑 <strong>Contraseña (PIN):</strong> {integrante.pin_acceso}</li>
+                        </ul>
+                    </div>
+                    
+                    <p>Si prefieres, también puedes descargar el código QR directamente aquí:</p>
+                    <div style="text-align: center; margin: 20px 0;">
+                        <img src="{p.url_qr}" alt="QR Ponencia" style="width:200px; height:200px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;">
+                    </div>
+                    
+                    <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
+                </div>
                 """
                 exito = enviar_correo(integrante.correo, asunto, cuerpo_html)
                 if exito: enviados += 1
                 else: errores += 1
                 
-        return jsonify({"mensaje": f"Proceso finalizado. Enviados: {enviados}, Errores: {errores}"}), 200
+        return jsonify({"mensaje": f"Proceso finalizado. Correos enviados: {enviados}, Errores: {errores}"}), 200
     except Exception as e:
         return jsonify({"error": f"Error al procesar envíos: {str(e)}"}), 500
