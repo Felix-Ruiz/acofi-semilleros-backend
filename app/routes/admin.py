@@ -13,7 +13,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import re
-import threading # NUEVO: Para enviar correos en segundo plano sin colgar el servidor
+import threading
 
 # =====================================================================
 # ⚠️ DOMINIO DE PRODUCCIÓN
@@ -31,7 +31,7 @@ admin_bp = Blueprint('admin', __name__)
 def generar_pin():
     return ''.join(random.choices(string.digits, k=4))
 
-# --- FUNCIÓN DE ENVÍO INDIVIDUAL CON TIMEOUT ANTI-CUELGUES ---
+# --- FUNCIÓN DE ENVÍO INDIVIDUAL CON TIMEOUT Y SOPORTE SSL (PUERTO 465) ---
 def enviar_correo(destinatario, asunto, cuerpo):
     try:
         smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
@@ -51,10 +51,15 @@ def enviar_correo(destinatario, asunto, cuerpo):
         msg['Subject'] = asunto
         msg.attach(MIMEText(cuerpo, 'html'))
         
-        # TIMEOUT DE 10s: Evita el SIGKILL de Render si Brevo no responde
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
+        # Conexión dinámica dependiendo del puerto (465 usa SSL directo)
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
+            server.login(smtp_user, smtp_pass)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            
         server.send_message(msg)
         server.quit()
         return True, "Enviado con éxito"
@@ -62,10 +67,12 @@ def enviar_correo(destinatario, asunto, cuerpo):
         return False, "Brevo rechazó la contraseña o el usuario SMTP."
     except smtplib.SMTPDataError:
         return False, f"Brevo bloqueó el envío (Verifica remitente: {remitente_oficial})."
+    except TimeoutError:
+        return False, f"El puerto {smtp_port} está bloqueado por el servidor (Timeout)."
     except Exception as e:
         return False, f"Error de red/SMTP: {str(e)}"
 
-# --- NUEVO: FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO ---
+# --- FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO CON SSL ---
 def proceso_envio_segundo_plano(lista_datos):
     smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
     smtp_pass = os.environ.get('MAIL_PASSWORD', '').strip()
@@ -79,10 +86,13 @@ def proceso_envio_segundo_plano(lista_datos):
         return
 
     try:
-        # Abre una SOLA conexión para todos, ahorrando memoria y tiempo
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=20)
+            server.login(smtp_user, smtp_pass)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
         
         for datos in lista_datos:
             try:
@@ -268,7 +278,7 @@ def eliminar_estudiante(id):
         db.session.rollback()
         return jsonify({"error": f"Error al eliminar estudiante: {str(e)}"}), 500
 
-# --- ENVIAR QR A INTEGRANTE INDIVIDUAL (CON TIMEOUT) ---
+# --- ENVIAR QR A INTEGRANTE INDIVIDUAL ---
 @admin_bp.route('/enviar_qr_estudiante/<int:id>', methods=['POST'])
 def enviar_qr_estudiante(id):
     try:
@@ -735,7 +745,7 @@ def cargar_excel():
         db.session.rollback()
         return jsonify({"error": f"Error procesando el archivo. Detalle: {str(e)}"}), 500
 
-# --- ENVÍO DE CORREOS MASIVOS (USANDO HILOS) ---
+# --- ENVÍO DE CORREOS MASIVOS (USANDO HILOS Y SSL) ---
 @admin_bp.route('/enviar_qrs', methods=['POST'])
 def enviar_qrs():
     data = request.get_json() or {}
@@ -764,7 +774,6 @@ def enviar_qrs():
         if len(lista_envio) == 0:
             return jsonify({"error": "No hay correos válidos para enviar en las ponencias seleccionadas."}), 400
 
-        # Inicia el proceso en segundo plano y devuelve respuesta inmediata al Frontend
         hilo = threading.Thread(target=proceso_envio_segundo_plano, args=(lista_envio,))
         hilo.start()
             
