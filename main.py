@@ -7,8 +7,11 @@ import os
 
 def create_app():
     app = Flask(__name__)
-    CORS(app)
     
+    # ⚠️ SOLUCIÓN DEFINITIVA DE CORS: Permite la conexión desde tu nuevo subdominio
+    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    
+    # Configuración de la base de datos (Conexión a Supabase)
     database_url = os.environ.get(
         'DATABASE_URL', 
         'postgresql+psycopg2://postgres:AcofiSemilleros%23@db.zobctsmkhuzibnlgmfqr.supabase.co:6543/postgres'
@@ -44,7 +47,6 @@ def create_app():
             db.session.add(admin_defecto)
             db.session.commit()
 
-        # Siembra de la configuración de inscripciones
         if Configuracion.query.filter_by(clave='registro_abierto').first() is None:
             config_registro = Configuracion(clave='registro_abierto', valor='true')
             db.session.add(config_registro)
