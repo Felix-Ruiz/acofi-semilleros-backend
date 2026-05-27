@@ -27,7 +27,6 @@ cloudinary.config(
 
 admin_bp = Blueprint('admin', __name__)
 
-# --- INYECTOR CORS PARA EVITAR ERRORES FANTASMA EN EL NAVEGADOR ---
 @admin_bp.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -38,10 +37,8 @@ def add_cors_headers(response):
 def generar_pin():
     return ''.join(random.choices(string.digits, k=4))
 
-# --- FUNCIÓN DE ENVÍO INDIVIDUAL POR API REST (ARQUITECTURA INSIGNIAS) ---
 def enviar_correo(destinatario, asunto, cuerpo):
     try:
-        # Brevo v3 permite usar la contraseña SMTP como API Key en cuentas recientes
         api_key = os.environ.get('BREVO_API_KEY') or os.environ.get('MAIL_PASSWORD', '').strip()
         remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
 
@@ -55,7 +52,6 @@ def enviar_correo(destinatario, asunto, cuerpo):
             "content-type": "application/json"
         }
         
-        # Payload estricto según la documentación de Brevo v3
         data = {
             "sender": {"name": "Comité Organizador ACOFI", "email": remitente_oficial},
             "to": [{"email": destinatario}],
@@ -73,7 +69,6 @@ def enviar_correo(destinatario, asunto, cuerpo):
     except Exception as e:
         return False, f"Error de red HTTP: {str(e)}"
 
-# --- FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO POR API REST ---
 def proceso_envio_segundo_plano(lista_datos):
     api_key = os.environ.get('BREVO_API_KEY') or os.environ.get('MAIL_PASSWORD', '').strip()
     remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
@@ -122,7 +117,7 @@ def proceso_envio_segundo_plano(lista_datos):
 
             req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
             with urllib.request.urlopen(req, timeout=15) as response:
-                pass # Éxito silencioso
+                pass 
         except Exception as e:
             print(f"Fallo HTTP enviando a {datos['correo']}: {str(e)}")
 
@@ -416,6 +411,7 @@ def obtener_evaluadores():
     except Exception as e:
         return jsonify({"error": f"Error al cargar evaluadores: {str(e)}"}), 500
 
+# --- CREACIÓN DE EVALUADOR CON ENVÍO INMEDIATO DE CORREO ---
 @admin_bp.route('/evaluadores', methods=['POST'])
 def crear_evaluador_admin():
     data = request.get_json()
@@ -431,6 +427,27 @@ def crear_evaluador_admin():
         )
         db.session.add(nuevo_evaluador)
         db.session.commit()
+
+        asunto = "Bienvenido como Evaluador - ACOFI 2026"
+        cuerpo_html = f"""
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
+            <h2 style="color: #1e3a8a;">Hola {nuevo_evaluador.nombres_apellidos},</h2>
+            <p>Has sido registrado exitosamente como Evaluador para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
+            <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
+                <h3 style="margin-top: 0; color: #1e3a8a;">Tus credenciales de acceso:</h3>
+                <p style="margin-bottom: 15px;">🔗 <strong>Plataforma:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
+                <ul style="list-style-type: none; padding-left: 0; margin: 0;">
+                    <li style="margin-bottom: 8px;">👤 <strong>Documento:</strong> {nuevo_evaluador.documento_identidad}</li>
+                    <li>🔑 <strong>PIN de Acceso:</strong> {nuevo_evaluador.pin_acceso}</li>
+                </ul>
+            </div>
+            <p>El día del evento, podrás acceder a la plataforma para usar el escáner de códigos QR y calificar los proyectos.</p>
+            <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
+        </div>
+        """
+        # Envío del correo en segundo plano para que la respuesta al admin sea instantánea
+        threading.Thread(target=enviar_correo, args=(nuevo_evaluador.correo, asunto, cuerpo_html)).start()
+
         return jsonify({"mensaje": "Evaluador creado con éxito", "pin": nuevo_evaluador.pin_acceso}), 201
     except Exception as e:
         db.session.rollback()
