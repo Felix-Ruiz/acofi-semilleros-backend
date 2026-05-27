@@ -9,11 +9,10 @@ import pandas as pd
 from openpyxl import Workbook
 import cloudinary
 import cloudinary.uploader
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 import re
 import threading
+import urllib.request
+import json
 
 # =====================================================================
 # ⚠️ DOMINIO DE PRODUCCIÓN
@@ -31,102 +30,92 @@ admin_bp = Blueprint('admin', __name__)
 def generar_pin():
     return ''.join(random.choices(string.digits, k=4))
 
+# --- FUNCIÓN DE ENVÍO INDIVIDUAL POR API REST (BURLA EL BLOQUEO SMTP DE RENDER) ---
 def enviar_correo(destinatario, asunto, cuerpo):
     try:
-        smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
-        smtp_pass = os.environ.get('MAIL_PASSWORD', '').strip()
-        remitente_oficial = os.environ.get('MAIL_SENDER', smtp_user).strip()
-        smtp_server = os.environ.get('MAIL_SERVER', 'smtp-relay.brevo.com').strip()
-        
-        port_env = os.environ.get('MAIL_PORT', '587').strip()
-        smtp_port = int(port_env) if port_env.isdigit() else 587
+        # Usamos la API Key en lugar de la contraseña SMTP
+        api_key = os.environ.get('BREVO_API_KEY', os.environ.get('MAIL_PASSWORD', '')).strip()
+        remitente_oficial = os.environ.get('MAIL_SENDER', 'info@acofiapps.com').strip()
 
-        if not smtp_user or not smtp_pass:
-            return False, "Faltan credenciales SMTP en Render."
+        if not api_key:
+            return False, "Falta la clave BREVO_API_KEY en las variables de entorno."
 
-        msg = MIMEMultipart()
-        msg['From'] = remitente_oficial
-        msg['To'] = destinatario
-        msg['Subject'] = asunto
-        msg.attach(MIMEText(cuerpo, 'html'))
-        
-        if smtp_port == 465:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
-            server.login(smtp_user, smtp_pass)
-        else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
+        url = "https://api.brevo.com/v3/smtp/email"
+        headers = {
+            "accept": "application/json",
+            "api-key": api_key,
+            "content-type": "application/json"
+        }
+        data = {
+            "sender": {"email": remitente_oficial},
+            "to": [{"email": destinatario}],
+            "subject": asunto,
+            "htmlContent": cuerpo
+        }
+
+        # Petición HTTP segura por puerto 443
+        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return True, "Enviado con éxito"
             
-        server.send_message(msg)
-        server.quit()
-        return True, "Enviado con éxito"
-    except smtplib.SMTPAuthenticationError:
-        return False, "Brevo rechazó la contraseña o el usuario SMTP."
-    except smtplib.SMTPDataError:
-        return False, f"Brevo bloqueó el envío (Verifica remitente: {remitente_oficial})."
-    except TimeoutError:
-        return False, f"El puerto {smtp_port} está bloqueado por el servidor (Timeout)."
+    except urllib.error.HTTPError as e:
+        error_msg = e.read().decode('utf-8')
+        return False, f"Rechazo de Brevo API: {error_msg}"
     except Exception as e:
-        return False, f"Error de red/SMTP: {str(e)}"
+        return False, f"Error de red HTTP: {str(e)}"
 
+# --- FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO POR API REST ---
 def proceso_envio_segundo_plano(lista_datos):
-    smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
-    smtp_pass = os.environ.get('MAIL_PASSWORD', '').strip()
-    remitente_oficial = os.environ.get('MAIL_SENDER', smtp_user).strip()
-    smtp_server = os.environ.get('MAIL_SERVER', 'smtp-relay.brevo.com').strip()
-    port_env = os.environ.get('MAIL_PORT', '587').strip()
-    smtp_port = int(port_env) if port_env.isdigit() else 587
+    api_key = os.environ.get('BREVO_API_KEY', os.environ.get('MAIL_PASSWORD', '')).strip()
+    remitente_oficial = os.environ.get('MAIL_SENDER', 'info@acofiapps.com').strip()
+    url = "https://api.brevo.com/v3/smtp/email"
 
-    if not smtp_user or not smtp_pass:
-        print("Envío en segundo plano cancelado: Faltan credenciales.")
+    if not api_key:
+        print("Envío en segundo plano cancelado: Falta BREVO_API_KEY.")
         return
 
-    try:
-        if smtp_port == 465:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=20)
-            server.login(smtp_user, smtp_pass)
-        else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-        
-        for datos in lista_datos:
-            try:
-                msg = MIMEMultipart()
-                msg['From'] = remitente_oficial
-                msg['To'] = datos['correo']
-                msg['Subject'] = f"Código QR de Evaluación - Ponencia: {datos['codigo']}"
+    headers = {
+        "accept": "application/json",
+        "api-key": api_key,
+        "content-type": "application/json"
+    }
+
+    for datos in lista_datos:
+        try:
+            cuerpo_html = f"""
+            <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
+                <h2 style="color: #1e3a8a;">Hola {datos['nombres']},</h2>
+                <p>Nos complace informarte que tu proyecto <strong>"{datos['titulo']}"</strong> está listo para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
+                <p>Tu código de póster asignado es: <strong style="font-size: 18px; color: #1e3a8a;">{datos['codigo']}</strong></p>
                 
-                cuerpo_html = f"""
-                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
-                    <h2 style="color: #1e3a8a;">Hola {datos['nombres']},</h2>
-                    <p>Nos complace informarte que tu proyecto <strong>"{datos['titulo']}"</strong> está listo para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
-                    <p>Tu código de póster asignado es: <strong style="font-size: 18px; color: #1e3a8a;">{datos['codigo']}</strong></p>
-                    
-                    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
-                        <h3 style="margin-top: 0; color: #1e3a8a;">Credencial Digital</h3>
-                        <p style="margin-bottom: 10px;">Para ver tu código QR desde tu celular e ingresar a la plataforma:</p>
-                        <p style="margin-bottom: 15px;">🔗 <strong>Enlace de ingreso:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
-                        <ul style="list-style-type: none; padding-left: 0; margin: 0;">
-                            <li style="margin-bottom: 8px;">👤 <strong>Usuario:</strong> Tu número de documento ({datos['documento']})</li>
-                            <li>🔑 <strong>Contraseña (PIN):</strong> {datos['pin']}</li>
-                        </ul>
-                    </div>
-                    <div style="text-align: center; margin: 20px 0;">
-                        <img src="{datos['url_qr']}" alt="QR Ponencia" style="width:200px; height:200px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;">
-                    </div>
-                    <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
+                <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
+                    <h3 style="margin-top: 0; color: #1e3a8a;">Credencial Digital</h3>
+                    <p style="margin-bottom: 10px;">Para ver tu código QR desde tu celular e ingresar a la plataforma:</p>
+                    <p style="margin-bottom: 15px;">🔗 <strong>Enlace de ingreso:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
+                    <ul style="list-style-type: none; padding-left: 0; margin: 0;">
+                        <li style="margin-bottom: 8px;">👤 <strong>Usuario:</strong> Tu número de documento ({datos['documento']})</li>
+                        <li>🔑 <strong>Contraseña (PIN):</strong> {datos['pin']}</li>
+                    </ul>
                 </div>
-                """
-                msg.attach(MIMEText(cuerpo_html, 'html'))
-                server.send_message(msg)
-            except Exception as e:
-                print(f"Fallo enviando a {datos['correo']}: {str(e)}")
-                
-        server.quit()
-    except Exception as e:
-        print(f"Error fatal en el hilo de envío masivo: {str(e)}")
+                <div style="text-align: center; margin: 20px 0;">
+                    <img src="{datos['url_qr']}" alt="QR Ponencia" style="width:200px; height:200px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;">
+                </div>
+                <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
+            </div>
+            """
+            
+            data = {
+                "sender": {"email": remitente_oficial},
+                "to": [{"email": datos['correo']}],
+                "subject": f"Código QR de Evaluación - Ponencia: {datos['codigo']}",
+                "htmlContent": cuerpo_html
+            }
+
+            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+            with urllib.request.urlopen(req, timeout=15) as response:
+                pass # Éxito silencioso
+        except Exception as e:
+            print(f"Fallo HTTP enviando a {datos['correo']}: {str(e)}")
 
 def eliminar_qr_cloudinary(url_qr):
     if not url_qr:
@@ -311,14 +300,12 @@ def enviar_qr_estudiante(id):
     except Exception as e:
         return jsonify({"error": f"Fallo en el servidor: {str(e)}"}), 500
 
-# --- LÓGICA OPTIMIZADA: ELIMINACIÓN DE CONSULTAS N+1 PARA MAYOR VELOCIDAD ---
 @admin_bp.route('/ponencias', methods=['GET'])
 def obtener_ponencias():
     try:
         ponencias = Ponencia.query.all()
         estudiantes = Estudiante.query.all()
         
-        # Agrupamos estudiantes en memoria (Ahorra cientos de consultas SQL lentas)
         estudiantes_por_trabajo = {}
         for e in estudiantes:
             if e.nombre_trabajo not in estudiantes_por_trabajo:
@@ -459,7 +446,6 @@ def editar_evaluador(id):
         db.session.rollback()
         return jsonify({"error": f"Error al actualizar evaluador: {str(e)}"}), 500
 
-# --- RANKING OPTIMIZADO PARA CARGA INMEDIATA ---
 @admin_bp.route('/ranking', methods=['GET'])
 def obtener_ranking():
     try:
@@ -467,14 +453,12 @@ def obtener_ranking():
         evaluaciones = Evaluacion.query.all()
         estudiantes = Estudiante.query.all()
 
-        # Agrupamos evaluaciones por ponencia en memoria
         evals_por_ponencia = {}
         for ev in evaluaciones:
             if ev.ponencia_id not in evals_por_ponencia:
                 evals_por_ponencia[ev.ponencia_id] = []
             evals_por_ponencia[ev.ponencia_id].append(ev)
 
-        # Agrupamos estudiantes por título en memoria
         estudiantes_por_trabajo = {}
         for e in estudiantes:
             if e.nombre_trabajo not in estudiantes_por_trabajo:
@@ -574,7 +558,6 @@ def borrar_todos(entidad):
         db.session.rollback()
         return jsonify({"error": f"Error al vaciar registros: {str(e)}"}), 500
 
-# --- EXCEL OPTIMIZADO PARA CONSULTAS N+1 ---
 @admin_bp.route('/exportar/<entidad>', methods=['GET'])
 def exportar_excel(entidad):
     try:
