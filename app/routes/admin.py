@@ -27,18 +27,26 @@ cloudinary.config(
 
 admin_bp = Blueprint('admin', __name__)
 
+# --- INYECTOR CORS PARA EVITAR ERRORES FANTASMA EN EL NAVEGADOR ---
+@admin_bp.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+    return response
+
 def generar_pin():
     return ''.join(random.choices(string.digits, k=4))
 
-# --- FUNCIÓN DE ENVÍO INDIVIDUAL POR API REST (BURLA EL BLOQUEO SMTP DE RENDER) ---
+# --- FUNCIÓN DE ENVÍO INDIVIDUAL POR API REST (ARQUITECTURA INSIGNIAS) ---
 def enviar_correo(destinatario, asunto, cuerpo):
     try:
-        # Usamos la API Key en lugar de la contraseña SMTP
-        api_key = os.environ.get('BREVO_API_KEY', os.environ.get('MAIL_PASSWORD', '')).strip()
-        remitente_oficial = os.environ.get('MAIL_SENDER', 'info@acofiapps.com').strip()
+        # Brevo v3 permite usar la contraseña SMTP como API Key en cuentas recientes
+        api_key = os.environ.get('BREVO_API_KEY') or os.environ.get('MAIL_PASSWORD', '').strip()
+        remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
 
         if not api_key:
-            return False, "Falta la clave BREVO_API_KEY en las variables de entorno."
+            return False, "Falta la clave de Brevo (MAIL_PASSWORD o BREVO_API_KEY) en Render."
 
         url = "https://api.brevo.com/v3/smtp/email"
         headers = {
@@ -46,14 +54,15 @@ def enviar_correo(destinatario, asunto, cuerpo):
             "api-key": api_key,
             "content-type": "application/json"
         }
+        
+        # Payload estricto según la documentación de Brevo v3
         data = {
-            "sender": {"email": remitente_oficial},
+            "sender": {"name": "Comité Organizador ACOFI", "email": remitente_oficial},
             "to": [{"email": destinatario}],
             "subject": asunto,
             "htmlContent": cuerpo
         }
 
-        # Petición HTTP segura por puerto 443
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
         with urllib.request.urlopen(req, timeout=15) as response:
             return True, "Enviado con éxito"
@@ -66,12 +75,12 @@ def enviar_correo(destinatario, asunto, cuerpo):
 
 # --- FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO POR API REST ---
 def proceso_envio_segundo_plano(lista_datos):
-    api_key = os.environ.get('BREVO_API_KEY', os.environ.get('MAIL_PASSWORD', '')).strip()
-    remitente_oficial = os.environ.get('MAIL_SENDER', 'info@acofiapps.com').strip()
+    api_key = os.environ.get('BREVO_API_KEY') or os.environ.get('MAIL_PASSWORD', '').strip()
+    remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
     url = "https://api.brevo.com/v3/smtp/email"
 
     if not api_key:
-        print("Envío en segundo plano cancelado: Falta BREVO_API_KEY.")
+        print("Envío en segundo plano cancelado: Falta clave de Brevo.")
         return
 
     headers = {
@@ -105,7 +114,7 @@ def proceso_envio_segundo_plano(lista_datos):
             """
             
             data = {
-                "sender": {"email": remitente_oficial},
+                "sender": {"name": "Comité Organizador ACOFI", "email": remitente_oficial},
                 "to": [{"email": datos['correo']}],
                 "subject": f"Código QR de Evaluación - Ponencia: {datos['codigo']}",
                 "htmlContent": cuerpo_html
