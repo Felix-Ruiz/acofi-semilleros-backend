@@ -27,6 +27,10 @@ class Estudiante(db.Model):
     cargo = db.Column(db.String(50), nullable=False)
     nombre_trabajo = db.Column(db.String(300), nullable=False)
     pin_acceso = db.Column(db.String(20), nullable=True)
+    
+    # ⚠️ NUEVA COLUMNA DE ASISTENCIA AÑADIDA
+    asistencia = db.Column(db.Boolean, default=False)
+    
     ponencia = db.relationship('Ponencia', backref='estudiante', uselist=False)
 
 class Evaluador(db.Model):

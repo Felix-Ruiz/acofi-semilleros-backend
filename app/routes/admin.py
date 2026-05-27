@@ -75,7 +75,6 @@ def proceso_envio_segundo_plano(lista_datos):
     url = "https://api.brevo.com/v3/smtp/email"
 
     if not api_key:
-        print("Envío en segundo plano cancelado: Falta clave de Brevo.")
         return
 
     headers = {
@@ -119,7 +118,7 @@ def proceso_envio_segundo_plano(lista_datos):
             with urllib.request.urlopen(req, timeout=15) as response:
                 pass 
         except Exception as e:
-            print(f"Fallo HTTP enviando a {datos['correo']}: {str(e)}")
+            pass
 
 def eliminar_qr_cloudinary(url_qr):
     if not url_qr:
@@ -130,7 +129,7 @@ def eliminar_qr_cloudinary(url_qr):
             public_id = match.group(1)
             cloudinary.uploader.destroy(public_id)
     except Exception as e:
-        print(f"Error borrando en Cloudinary: {e}")
+        pass
 
 @admin_bp.route('/configuracion', methods=['GET'])
 def obtener_configuracion():
@@ -184,11 +183,27 @@ def obtener_estudiantes():
                 "ciudad": e.ciudad,
                 "cargo": e.cargo,
                 "nombre_trabajo": e.nombre_trabajo,
-                "pin_acceso": e.pin_acceso
+                "pin_acceso": e.pin_acceso,
+                "asistencia": getattr(e, 'asistencia', False) # Integración de Asistencia
             })
         return jsonify(resultado), 200
     except Exception as e:
         return jsonify({"error": f"Error al cargar estudiantes: {str(e)}"}), 500
+
+# --- NUEVA RUTA: TOGGLE DE ASISTENCIA ---
+@admin_bp.route('/estudiantes/<int:id>/asistencia', methods=['PUT'])
+def toggle_asistencia(id):
+    data = request.get_json()
+    try:
+        estudiante = Estudiante.query.get(id)
+        if not estudiante:
+            return jsonify({"error": "Estudiante no encontrado"}), 404
+        estudiante.asistencia = data.get('asistencia', False)
+        db.session.commit()
+        return jsonify({"mensaje": "Asistencia actualizada con éxito", "asistencia": estudiante.asistencia}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Error al actualizar asistencia: {str(e)}"}), 500
 
 @admin_bp.route('/estudiantes/<int:id>', methods=['PUT'])
 def editar_estudiante(id):
@@ -411,7 +426,6 @@ def obtener_evaluadores():
     except Exception as e:
         return jsonify({"error": f"Error al cargar evaluadores: {str(e)}"}), 500
 
-# --- CREACIÓN DE EVALUADOR CON ENVÍO INMEDIATO DE CORREO ---
 @admin_bp.route('/evaluadores', methods=['POST'])
 def crear_evaluador_admin():
     data = request.get_json()
@@ -427,27 +441,6 @@ def crear_evaluador_admin():
         )
         db.session.add(nuevo_evaluador)
         db.session.commit()
-
-        asunto = "Bienvenido como Evaluador - ACOFI 2026"
-        cuerpo_html = f"""
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
-            <h2 style="color: #1e3a8a;">Hola {nuevo_evaluador.nombres_apellidos},</h2>
-            <p>Has sido registrado exitosamente como Evaluador para el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026.</p>
-            <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
-                <h3 style="margin-top: 0; color: #1e3a8a;">Tus credenciales de acceso:</h3>
-                <p style="margin-bottom: 15px;">🔗 <strong>Plataforma:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
-                <ul style="list-style-type: none; padding-left: 0; margin: 0;">
-                    <li style="margin-bottom: 8px;">👤 <strong>Documento:</strong> {nuevo_evaluador.documento_identidad}</li>
-                    <li>🔑 <strong>PIN de Acceso:</strong> {nuevo_evaluador.pin_acceso}</li>
-                </ul>
-            </div>
-            <p>El día del evento, podrás acceder a la plataforma para usar el escáner de códigos QR y calificar los proyectos.</p>
-            <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
-        </div>
-        """
-        # Envío del correo en segundo plano para que la respuesta al admin sea instantánea
-        threading.Thread(target=enviar_correo, args=(nuevo_evaluador.correo, asunto, cuerpo_html)).start()
-
         return jsonify({"mensaje": "Evaluador creado con éxito", "pin": nuevo_evaluador.pin_acceso}), 201
     except Exception as e:
         db.session.rollback()
@@ -639,6 +632,15 @@ def exportar_excel(entidad):
                     p6, p7, p8, p9, p10, total, resp.get('comentarios', '')
                 ])
             filename = "Resultados_Evaluaciones_Semillero.xlsx"
+        # --- EXPORTACIÓN DE ASISTENCIA ---
+        elif entidad == 'asistencia':
+            ws.title = "Control de Asistencia"
+            estudiantes = Estudiante.query.all()
+            ws.append(['ID', 'Nombres y Apellidos', 'Documento', 'Institución', 'Proyecto', 'Asistió'])
+            for e in estudiantes:
+                asistio_texto = "SÍ" if getattr(e, 'asistencia', False) else "NO"
+                ws.append([e.id, e.nombres_apellidos, e.documento_identidad, e.institucion, e.nombre_trabajo, asistio_texto])
+            filename = "Control_Asistencia_Estudiantes.xlsx"
         else:
             return jsonify({"error": "Entidad no válida"}), 400
 
