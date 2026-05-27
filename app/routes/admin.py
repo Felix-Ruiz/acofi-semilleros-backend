@@ -43,7 +43,7 @@ def enviar_correo(destinatario, asunto, cuerpo):
         remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
 
         if not api_key:
-            return False, "Falta la clave de Brevo (MAIL_PASSWORD o BREVO_API_KEY) en Render."
+            return False, "Falta la clave de Brevo."
 
         url = "https://api.brevo.com/v3/smtp/email"
         headers = {
@@ -63,19 +63,15 @@ def enviar_correo(destinatario, asunto, cuerpo):
         with urllib.request.urlopen(req, timeout=15) as response:
             return True, "Enviado con éxito"
             
-    except urllib.error.HTTPError as e:
-        error_msg = e.read().decode('utf-8')
-        return False, f"Rechazo de Brevo API: {error_msg}"
     except Exception as e:
-        return False, f"Error de red HTTP: {str(e)}"
+        return False, f"Error HTTP: {str(e)}"
 
 def proceso_envio_segundo_plano(lista_datos):
     api_key = os.environ.get('BREVO_API_KEY') or os.environ.get('MAIL_PASSWORD', '').strip()
     remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
     url = "https://api.brevo.com/v3/smtp/email"
 
-    if not api_key:
-        return
+    if not api_key: return
 
     headers = {
         "accept": "application/json",
@@ -106,7 +102,6 @@ def proceso_envio_segundo_plano(lista_datos):
                 <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
             </div>
             """
-            
             data = {
                 "sender": {"name": "Comité Organizador ACOFI", "email": remitente_oficial},
                 "to": [{"email": datos['correo']}],
@@ -121,13 +116,11 @@ def proceso_envio_segundo_plano(lista_datos):
             pass
 
 def eliminar_qr_cloudinary(url_qr):
-    if not url_qr:
-        return
+    if not url_qr: return
     try:
         match = re.search(r'(qrs_acofi/[^.]+)', url_qr)
         if match:
-            public_id = match.group(1)
-            cloudinary.uploader.destroy(public_id)
+            cloudinary.uploader.destroy(match.group(1))
     except Exception as e:
         pass
 
@@ -184,20 +177,18 @@ def obtener_estudiantes():
                 "cargo": e.cargo,
                 "nombre_trabajo": e.nombre_trabajo,
                 "pin_acceso": e.pin_acceso,
-                "asistencia": getattr(e, 'asistencia', False) # Integración de Asistencia
+                "asistencia": getattr(e, 'asistencia', False)
             })
         return jsonify(resultado), 200
     except Exception as e:
         return jsonify({"error": f"Error al cargar estudiantes: {str(e)}"}), 500
 
-# --- NUEVA RUTA: TOGGLE DE ASISTENCIA ---
 @admin_bp.route('/estudiantes/<int:id>/asistencia', methods=['PUT'])
 def toggle_asistencia(id):
     data = request.get_json()
     try:
         estudiante = Estudiante.query.get(id)
-        if not estudiante:
-            return jsonify({"error": "Estudiante no encontrado"}), 404
+        if not estudiante: return jsonify({"error": "Estudiante no encontrado"}), 404
         estudiante.asistencia = data.get('asistencia', False)
         db.session.commit()
         return jsonify({"mensaje": "Asistencia actualizada con éxito", "asistencia": estudiante.asistencia}), 200
@@ -210,8 +201,7 @@ def editar_estudiante(id):
     data = request.get_json()
     try:
         estudiante = Estudiante.query.get(id)
-        if not estudiante:
-            return jsonify({"error": "Estudiante no encontrado"}), 404
+        if not estudiante: return jsonify({"error": "Estudiante no encontrado"}), 404
         
         antiguo_trabajo = estudiante.nombre_trabajo
         estudiante.nombres_apellidos = data.get('nombres_apellidos', estudiante.nombres_apellidos)
@@ -244,8 +234,7 @@ def editar_estudiante(id):
                 qr.save(ruta_temporal)
                 upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
                 ponencia_nueva.url_qr = upload_result.get("secure_url")
-                if os.path.exists(ruta_temporal):
-                    os.remove(ruta_temporal)
+                if os.path.exists(ruta_temporal): os.remove(ruta_temporal)
                     
         db.session.commit()
         return jsonify({"mensaje": "Datos del estudiante actualizados con éxito"}), 200
@@ -257,8 +246,7 @@ def editar_estudiante(id):
 def eliminar_estudiante(id):
     try:
         estudiante = Estudiante.query.get(id)
-        if not estudiante:
-            return jsonify({"error": "Estudiante no encontrado"}), 404
+        if not estudiante: return jsonify({"error": "Estudiante no encontrado"}), 404
         
         trabajo = estudiante.nombre_trabajo
         db.session.delete(estudiante)
@@ -282,12 +270,10 @@ def eliminar_estudiante(id):
 def enviar_qr_estudiante(id):
     try:
         integrante = Estudiante.query.get(id)
-        if not integrante:
-            return jsonify({"error": "Estudiante no encontrado"}), 404
+        if not integrante: return jsonify({"error": "Estudiante no encontrado"}), 404
             
         p = Ponencia.query.filter_by(titulo=integrante.nombre_trabajo).first()
-        if not p or not p.url_qr:
-            return jsonify({"error": "El proyecto no posee un código QR activo."}), 400
+        if not p or not p.url_qr: return jsonify({"error": "El proyecto no posee un código QR activo."}), 400
             
         asunto = f"Código QR de Evaluación - Ponencia: {p.codigo}"
         cuerpo_html = f"""
@@ -313,8 +299,7 @@ def enviar_qr_estudiante(id):
         </div>
         """
         exito, mensaje_error = enviar_correo(integrante.correo, asunto, cuerpo_html)
-        if exito:
-            return jsonify({"mensaje": f"Credencial enviada con éxito a {integrante.correo}"}), 200
+        if exito: return jsonify({"mensaje": f"Credencial enviada con éxito a {integrante.correo}"}), 200
         return jsonify({"error": mensaje_error}), 400
     except Exception as e:
         return jsonify({"error": f"Fallo en el servidor: {str(e)}"}), 500
@@ -363,7 +348,8 @@ def crear_ponencia_admin():
             ciudad=data['estudiante_ciudad'],
             cargo=data['estudiante_cargo'],
             nombre_trabajo=data['titulo'],
-            pin_acceso=generar_pin()
+            pin_acceso=generar_pin(),
+            asistencia=False
         )
         db.session.add(nuevo_estudiante)
         db.session.flush()
@@ -388,8 +374,7 @@ def editar_ponencia(id):
     data = request.get_json()
     try:
         ponencia = Ponencia.query.get(id)
-        if not ponencia:
-            return jsonify({"error": "Ponencia no encontrada"}), 404
+        if not ponencia: return jsonify({"error": "Ponencia no encontrada"}), 404
         ponencia.titulo = data['titulo']
         if ponencia.estudiante:
             ponencia.estudiante.nombres_apellidos = data['estudiante_nombre']
@@ -451,8 +436,7 @@ def editar_evaluador(id):
     data = request.get_json()
     try:
         evaluador = Evaluador.query.get(id)
-        if not evaluador:
-            return jsonify({"error": "Evaluador no encontrado"}), 404
+        if not evaluador: return jsonify({"error": "Evaluador no encontrado"}), 404
         evaluador.nombres_apellidos = data['nombres_apellidos']
         evaluador.documento_identidad = data['documento_identidad']
         evaluador.institucion = data['institucion']
@@ -474,14 +458,12 @@ def obtener_ranking():
 
         evals_por_ponencia = {}
         for ev in evaluaciones:
-            if ev.ponencia_id not in evals_por_ponencia:
-                evals_por_ponencia[ev.ponencia_id] = []
+            if ev.ponencia_id not in evals_por_ponencia: evals_por_ponencia[ev.ponencia_id] = []
             evals_por_ponencia[ev.ponencia_id].append(ev)
 
         estudiantes_por_trabajo = {}
         for e in estudiantes:
-            if e.nombre_trabajo not in estudiantes_por_trabajo:
-                estudiantes_por_trabajo[e.nombre_trabajo] = []
+            if e.nombre_trabajo not in estudiantes_por_trabajo: estudiantes_por_trabajo[e.nombre_trabajo] = []
             estudiantes_por_trabajo[e.nombre_trabajo].append(e)
 
         resultado = []
@@ -520,8 +502,7 @@ def obtener_ranking():
 def eliminar_ponencia(id):
     try:
         ponencia = Ponencia.query.get(id)
-        if not ponencia:
-            return jsonify({"error": "Ponencia no encontrada"}), 404
+        if not ponencia: return jsonify({"error": "Ponencia no encontrada"}), 404
             
         eliminar_qr_cloudinary(ponencia.url_qr)
         Evaluacion.query.filter_by(ponencia_id=id).delete()
@@ -543,8 +524,7 @@ def eliminar_ponencia(id):
 def eliminar_evaluador(id):
     try:
         evaluador = Evaluador.query.get(id)
-        if not evaluador:
-            return jsonify({"error": "Evaluador no encontrado"}), 404
+        if not evaluador: return jsonify({"error": "Evaluador no encontrado"}), 404
         Evaluacion.query.filter_by(evaluador_id=id).delete()
         db.session.delete(evaluador)
         db.session.commit()
@@ -632,7 +612,6 @@ def exportar_excel(entidad):
                     p6, p7, p8, p9, p10, total, resp.get('comentarios', '')
                 ])
             filename = "Resultados_Evaluaciones_Semillero.xlsx"
-        # --- EXPORTACIÓN DE ASISTENCIA ---
         elif entidad == 'asistencia':
             ws.title = "Control de Asistencia"
             estudiantes = Estudiante.query.all()
@@ -654,10 +633,8 @@ def exportar_excel(entidad):
 @admin_bp.route('/aceptar_ponencia/<int:id_ponencia>', methods=['POST'])
 def aceptar_ponencia(id_ponencia):
     ponencia = Ponencia.query.get(id_ponencia)
-    if not ponencia:
-        return jsonify({"error": "Ponencia no encontrada"}), 404
-    if ponencia.estado == 'aceptada' and ponencia.url_qr:
-        return jsonify({"mensaje": "La ponencia ya estaba aceptada", "codigo_asignado": ponencia.codigo}), 200
+    if not ponencia: return jsonify({"error": "Ponencia no encontrada"}), 404
+    if ponencia.estado == 'aceptada' and ponencia.url_qr: return jsonify({"mensaje": "La ponencia ya estaba aceptada", "codigo_asignado": ponencia.codigo}), 200
     try:
         ponencia.estado = 'aceptada'
         if not ponencia.codigo:
@@ -676,8 +653,7 @@ def aceptar_ponencia(id_ponencia):
         upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
         ponencia.url_qr = upload_result.get("secure_url")
         
-        if os.path.exists(ruta_temporal):
-            os.remove(ruta_temporal)
+        if os.path.exists(ruta_temporal): os.remove(ruta_temporal)
             
         db.session.commit()
         return jsonify({"mensaje": "Ponencia aceptada y QR generado con éxito", "codigo_asignado": ponencia.codigo, "url_qr": ponencia.url_qr}), 200
@@ -685,6 +661,7 @@ def aceptar_ponencia(id_ponencia):
         db.session.rollback()
         return jsonify({"error": f"Error al procesar la ponencia: {str(e)}"}), 500
 
+# ⚠️ PROCESADOR DE EXCEL BLINDADO FILA POR FILA (NUNCA OMITE)
 @admin_bp.route('/cargar_excel', methods=['POST'])
 def cargar_excel():
     if 'file' not in request.files:
@@ -693,84 +670,106 @@ def cargar_excel():
     if file.filename == '':
         return jsonify({"error": "Archivo vacío"}), 400
     try:
-        if file.filename.endswith('.csv'):
-            df = pd.read_csv(file)
-        else:
-            df = pd.read_excel(file)
+        if file.filename.endswith('.csv'): df = pd.read_csv(file)
+        else: df = pd.read_excel(file)
 
+        # Reemplazamos todos los vacíos para que no salgan como "N/A"
+        df = df.fillna('')
+        
+        # Buscadores de columnas dinámicos para evitar errores de tipeo en el Excel
+        col_nombres = next((c for c in df.columns if 'nombre y apellido' in str(c).lower()), None) or 'Nombre y apellidos'
+        col_doc = next((c for c in df.columns if 'documento' in str(c).lower()), None) or 'Número de documento de identidad'
+        col_inst = next((c for c in df.columns if 'institución' in str(c).lower() or 'institucion' in str(c).lower()), None) or 'Institución'
+        col_correo = next((c for c in df.columns if 'correo' in str(c).lower()), None) or 'Correo electrónico'
+        col_ciudad = next((c for c in df.columns if 'ciudad' in str(c).lower()), None) or 'Ciudad'
+        col_cargo = next((c for c in df.columns if 'cargo' in str(c).lower()), None) or 'Cargo'
+        col_titulo = next((c for c in df.columns if 'trabajo' in str(c).lower()), None) or 'Nombre del trabajo que representa (debe ser el mismo enviado en la carta de notificación del paso a la tercera fase).'
+        col_codigo = next((c for c in df.columns if 'código' in str(c).lower() or 'codigo' in str(c).lower()), None) or 'Código'
+
+        # ⚠️ Procesamos fila por fila para que un error en un estudiante no aborte el archivo entero
         for index, row in df.iterrows():
-            nombres = str(row.get('Nombre y apellidos', '')).strip()
-            documento = str(row.get('Número de documento de identidad', '')).strip()
-            institucion = str(row.get('Institución', '')).strip()
-            correo = str(row.get('Correo electrónico', '')).strip()
-            ciudad = str(row.get('Ciudad', '')).strip()
-            cargo = str(row.get('Cargo', '')).strip()
-            titulo = str(row.get('Nombre del trabajo que representa (debe ser el mismo enviado en la carta de notificación del paso a la tercera fase).', '')).strip()
-            
-            codigo_excel = str(row.get('Código', row.get('Codigo', ''))).strip()
+            try:
+                nombres = str(row.get(col_nombres, '')).strip()
+                if not nombres or nombres.lower() == 'nan': continue
 
-            if not nombres or nombres.lower() == 'nan':
-                continue
+                documento = str(row.get(col_doc, '')).replace('.0', '').strip()
+                institucion = str(row.get(col_inst, '')).strip()
+                correo = str(row.get(col_correo, '')).strip()
+                ciudad = str(row.get(col_ciudad, '')).strip()
+                cargo = str(row.get(col_cargo, '')).strip()
+                titulo = str(row.get(col_titulo, '')).strip()
+                codigo_excel = str(row.get(col_codigo, '')).replace('.0', '').strip()
+                
+                # Salvavidas para datos vacíos que causaban errores
+                if not documento: documento = "SD-" + ''.join(random.choices(string.digits, k=6))
+                if not correo: correo = f"sincorreo_{documento}@acofi.edu.co"
 
-            estudiante = Estudiante.query.filter_by(documento_identidad=documento).first()
-            if not estudiante:
-                estudiante = Estudiante(
-                    nombres_apellidos=nombres,
-                    documento_identidad=documento,
-                    institucion=institucion,
-                    correo=correo,
-                    ciudad=ciudad,
-                    cargo=cargo,
-                    nombre_trabajo=titulo,
-                    pin_acceso=generar_pin()
-                )
-                db.session.add(estudiante)
-                db.session.flush()
+                # Verificamos si este correo ya lo usa otro (para evitar que se omitan)
+                exist_email = Estudiante.query.filter_by(correo=correo).first()
+                if exist_email and exist_email.documento_identidad != documento:
+                    correo = f"dup_{documento}_{correo}"
 
-            ponencia = None
-            if codigo_excel and codigo_excel.lower() != 'nan':
-                ponencia = Ponencia.query.filter_by(codigo=codigo_excel).first()
-            
-            if not ponencia:
-                ponencia = Ponencia.query.filter_by(titulo=titulo).first()
-
-            if not ponencia:
-                if codigo_excel and codigo_excel.lower() != 'nan':
-                    codigo_final = codigo_excel
+                estudiante = Estudiante.query.filter_by(documento_identidad=documento).first()
+                if not estudiante:
+                    estudiante = Estudiante(
+                        nombres_apellidos=nombres,
+                        documento_identidad=documento,
+                        institucion=institucion,
+                        correo=correo,
+                        ciudad=ciudad,
+                        cargo=cargo,
+                        nombre_trabajo=titulo,
+                        pin_acceso=generar_pin(),
+                        asistencia=False
+                    )
+                    db.session.add(estudiante)
+                    db.session.flush() # Guarda temporalmente para darle un ID
                 else:
-                    while True:
-                        codigo_generado = str(random.randint(100, 999))
-                        if not Ponencia.query.filter_by(codigo=codigo_generado).first():
-                            codigo_final = codigo_generado
-                            break
-                
-                ponencia = Ponencia(
-                    titulo=titulo,
-                    estado='aceptada',
-                    estudiante_id=estudiante.id,
-                    codigo=codigo_final
-                )
-                db.session.add(ponencia)
-                db.session.flush()
+                    estudiante.nombre_trabajo = titulo # Si ya existe, solo actualizamos el trabajo
 
-                url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
-                qr = qrcode.make(url_evaluacion)
+                # PONENCIAS
+                ponencia = None
+                if codigo_excel and codigo_excel.lower() != 'nan':
+                    ponencia = Ponencia.query.filter_by(codigo=codigo_excel).first()
+                if not ponencia:
+                    ponencia = Ponencia.query.filter_by(titulo=titulo).first()
+
+                if not ponencia:
+                    if codigo_excel and codigo_excel.lower() != 'nan':
+                        codigo_final = codigo_excel
+                    else:
+                        while True:
+                            codigo_generado = str(random.randint(100, 999))
+                            if not Ponencia.query.filter_by(codigo=codigo_generado).first():
+                                codigo_final = codigo_generado
+                                break
+                    ponencia = Ponencia(
+                        titulo=titulo,
+                        estado='aceptada',
+                        estudiante_id=estudiante.id,
+                        codigo=codigo_final
+                    )
+                    db.session.add(ponencia)
+                    db.session.flush()
+
+                    url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
+                    qr = qrcode.make(url_evaluacion)
+                    ruta_temporal = f"qr_excel_{ponencia.codigo}.png"
+                    qr.save(ruta_temporal)
+                    upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
+                    ponencia.url_qr = upload_result.get("secure_url")
+                    if os.path.exists(ruta_temporal): os.remove(ruta_temporal)
                 
-                ruta_temporal = f"qr_excel_{ponencia.codigo}.png"
-                qr.save(ruta_temporal)
-                upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
-                ponencia.url_qr = upload_result.get("secure_url")
-                
-                if os.path.exists(ruta_temporal):
-                    os.remove(ruta_temporal)
-            else:
-                estudiante.nombre_trabajo = ponencia.titulo
-                    
-        db.session.commit()
-        return jsonify({"mensaje": "Archivo procesado. Estudiantes agrupados y QRs generados exitosamente."}), 200
+                # GUARDAMOS ESTA FILA. Si la siguiente falla, esta ya quedó a salvo.
+                db.session.commit()
+            except Exception as e_row:
+                db.session.rollback()
+                print(f"Error forzado al saltar en fila {index}: {str(e_row)}")
+
+        return jsonify({"mensaje": "Archivo procesado. Estudiantes y ponencias guardados exitosamente."}), 200
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": f"Error procesando el archivo. Detalle: {str(e)}"}), 500
+        return jsonify({"error": f"Error global procesando el archivo: {str(e)}"}), 500
 
 @admin_bp.route('/enviar_qrs', methods=['POST'])
 def enviar_qrs():
