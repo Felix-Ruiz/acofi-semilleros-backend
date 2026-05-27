@@ -28,14 +28,13 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    # ⚠️ SOLUCIÓN DE RENDIMIENTO Y VELOCIDAD EXTREMA (CONNECTION POOLING)
-    # Esto evita las "conexiones zombis" y elimina el tiempo de espera de 1 minuto
+    # CONNECTION POOLING DE ALTO RENDIMIENTO
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        "pool_size": 20,          # Mantiene 20 conexiones listas y abiertas todo el tiempo
-        "max_overflow": 40,       # Si hay mucho tráfico, permite 40 conexiones extra
-        "pool_pre_ping": True,    # CRÍTICO: Verifica si la conexión está viva antes de usarla (Evita el cuelgue de 60 segundos)
-        "pool_recycle": 1800,     # Recicla las conexiones cada 30 minutos para mantenerlas frescas
-        "pool_timeout": 30        # Si hay cola, no espera más de 30 segundos
+        "pool_size": 20,          
+        "max_overflow": 40,       
+        "pool_pre_ping": True,    
+        "pool_recycle": 1800,     
+        "pool_timeout": 30        
     }
     
     db.init_app(app)
@@ -101,7 +100,8 @@ def create_app():
                     "mensaje": "Inicio de sesión de administrador exitoso",
                     "tipo_usuario": "admin",
                     "id": admin.id,
-                    "nombre": "Administrador General"
+                    "nombre": "Administrador General",
+                    "correo": admin.correo
                 }), 200
             return jsonify({"error": "Correo electrónico o contraseña incorrectos."}), 401
 
@@ -114,7 +114,8 @@ def create_app():
                 "mensaje": "Inicio de sesión exitoso",
                 "tipo_usuario": "evaluador",
                 "id": evaluador.id,
-                "nombre": evaluador.nombres_apellidos
+                "nombre": evaluador.nombres_apellidos,
+                "correo": evaluador.correo # <-- CORRECCIÓN: Ahora el backend devuelve el correo
             }), 200
 
         estudiante = Estudiante.query.filter_by(documento_identidad=documento, pin_acceso=pin).first()
@@ -123,7 +124,8 @@ def create_app():
                 "mensaje": "Inicio de sesión exitoso",
                 "tipo_usuario": "estudiante",
                 "id": estudiante.id,
-                "nombre": estudiante.nombres_apellidos
+                "nombre": estudiante.nombres_apellidos,
+                "correo": estudiante.correo # <-- CORRECCIÓN: Ahora el backend devuelve el correo
             }), 200
 
         return jsonify({"error": "Número de documento o PIN incorrectos."}), 401
