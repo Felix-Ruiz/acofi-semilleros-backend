@@ -31,7 +31,6 @@ admin_bp = Blueprint('admin', __name__)
 def generar_pin():
     return ''.join(random.choices(string.digits, k=4))
 
-# --- FUNCIÓN DE ENVÍO INDIVIDUAL CON TIMEOUT Y SOPORTE SSL (PUERTO 465) ---
 def enviar_correo(destinatario, asunto, cuerpo):
     try:
         smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
@@ -51,7 +50,6 @@ def enviar_correo(destinatario, asunto, cuerpo):
         msg['Subject'] = asunto
         msg.attach(MIMEText(cuerpo, 'html'))
         
-        # Conexión dinámica dependiendo del puerto (465 usa SSL directo)
         if smtp_port == 465:
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
             server.login(smtp_user, smtp_pass)
@@ -72,7 +70,6 @@ def enviar_correo(destinatario, asunto, cuerpo):
     except Exception as e:
         return False, f"Error de red/SMTP: {str(e)}"
 
-# --- FUNCIÓN PARA ENVÍO MASIVO EN SEGUNDO PLANO CON SSL ---
 def proceso_envio_segundo_plano(lista_datos):
     smtp_user = os.environ.get('MAIL_USERNAME', '').strip()
     smtp_pass = os.environ.get('MAIL_PASSWORD', '').strip()
@@ -142,7 +139,6 @@ def eliminar_qr_cloudinary(url_qr):
     except Exception as e:
         print(f"Error borrando en Cloudinary: {e}")
 
-# --- ENDPOINTS DE CONFIGURACIÓN GLOBAL ---
 @admin_bp.route('/configuracion', methods=['GET'])
 def obtener_configuracion():
     config = Configuracion.query.filter_by(clave='registro_abierto').first()
@@ -159,7 +155,6 @@ def alternar_configuracion():
     db.session.commit()
     return jsonify({"mensaje": "Estado de registros actualizado", "registro_abierto": config.valor == 'true'}), 200
 
-# --- PERFIL INDIVIDUAL DE ESTUDIANTE ---
 @admin_bp.route('/estudiante_perfil/<int:estudiante_id>', methods=['GET'])
 def obtener_perfil_estudiante(estudiante_id):
     try:
@@ -181,7 +176,6 @@ def obtener_perfil_estudiante(estudiante_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- LEER TODOS LOS ESTUDIANTES ---
 @admin_bp.route('/estudiantes', methods=['GET'])
 def obtener_estudiantes():
     try:
@@ -203,7 +197,6 @@ def obtener_estudiantes():
     except Exception as e:
         return jsonify({"error": f"Error al cargar estudiantes: {str(e)}"}), 500
 
-# --- ACTUALIZAR ESTUDIANTE INDIVIDUAL ---
 @admin_bp.route('/estudiantes/<int:id>', methods=['PUT'])
 def editar_estudiante(id):
     data = request.get_json()
@@ -252,7 +245,6 @@ def editar_estudiante(id):
         db.session.rollback()
         return jsonify({"error": f"Error al actualizar estudiante: {str(e)}"}), 500
 
-# --- ELIMINAR ESTUDIANTE INDIVIDUAL ---
 @admin_bp.route('/estudiantes/<int:id>', methods=['DELETE'])
 def eliminar_estudiante(id):
     try:
@@ -278,7 +270,6 @@ def eliminar_estudiante(id):
         db.session.rollback()
         return jsonify({"error": f"Error al eliminar estudiante: {str(e)}"}), 500
 
-# --- ENVIAR QR A INTEGRANTE INDIVIDUAL ---
 @admin_bp.route('/enviar_qr_estudiante/<int:id>', methods=['POST'])
 def enviar_qr_estudiante(id):
     try:
@@ -320,14 +311,23 @@ def enviar_qr_estudiante(id):
     except Exception as e:
         return jsonify({"error": f"Fallo en el servidor: {str(e)}"}), 500
 
-# --- LEER PONENCIAS (AGRUPANDO INTEGRANTES) ---
+# --- LÓGICA OPTIMIZADA: ELIMINACIÓN DE CONSULTAS N+1 PARA MAYOR VELOCIDAD ---
 @admin_bp.route('/ponencias', methods=['GET'])
 def obtener_ponencias():
     try:
         ponencias = Ponencia.query.all()
+        estudiantes = Estudiante.query.all()
+        
+        # Agrupamos estudiantes en memoria (Ahorra cientos de consultas SQL lentas)
+        estudiantes_por_trabajo = {}
+        for e in estudiantes:
+            if e.nombre_trabajo not in estudiantes_por_trabajo:
+                estudiantes_por_trabajo[e.nombre_trabajo] = []
+            estudiantes_por_trabajo[e.nombre_trabajo].append(e)
+
         resultado = []
         for p in ponencias:
-            integrantes_db = Estudiante.query.filter_by(nombre_trabajo=p.titulo).all()
+            integrantes_db = estudiantes_por_trabajo.get(p.titulo, [])
             nombres_integrantes = " | ".join([i.nombres_apellidos for i in integrantes_db])
             
             resultado.append({
@@ -345,7 +345,6 @@ def obtener_ponencias():
     except Exception as e:
         return jsonify({"error": f"Error al cargar ponencias: {str(e)}"}), 500
 
-# --- CREAR PONENCIA + ESTUDIANTE DESDE EL ADMIN ---
 @admin_bp.route('/ponencias', methods=['POST'])
 def crear_ponencia_admin():
     data = request.get_json()
@@ -378,7 +377,6 @@ def crear_ponencia_admin():
         db.session.rollback()
         return jsonify({"error": f"Error al crear: {str(e)}"}), 500
 
-# --- ACTUALIZAR/EDITAR PONENCIA + ESTUDIANTE ---
 @admin_bp.route('/ponencias/<int:id>', methods=['PUT'])
 def editar_ponencia(id):
     data = request.get_json()
@@ -401,7 +399,6 @@ def editar_ponencia(id):
         db.session.rollback()
         return jsonify({"error": f"Error al actualizar: {str(e)}"}), 500
 
-# --- LEER EVALUADORES ---
 @admin_bp.route('/evaluadores', methods=['GET'])
 def obtener_evaluadores():
     try:
@@ -423,7 +420,6 @@ def obtener_evaluadores():
     except Exception as e:
         return jsonify({"error": f"Error al cargar evaluadores: {str(e)}"}), 500
 
-# --- CREAR EVALUADOR DESDE EL ADMIN ---
 @admin_bp.route('/evaluadores', methods=['POST'])
 def crear_evaluador_admin():
     data = request.get_json()
@@ -444,7 +440,6 @@ def crear_evaluador_admin():
         db.session.rollback()
         return jsonify({"error": f"Error al crear evaluador: {str(e)}"}), 500
 
-# --- ACTUALIZAR/EDITAR EVALUADOR ---
 @admin_bp.route('/evaluadores/<int:id>', methods=['PUT'])
 def editar_evaluador(id):
     data = request.get_json()
@@ -464,17 +459,35 @@ def editar_evaluador(id):
         db.session.rollback()
         return jsonify({"error": f"Error al actualizar evaluador: {str(e)}"}), 500
 
-# --- RANKING Y RESULTADOS ---
+# --- RANKING OPTIMIZADO PARA CARGA INMEDIATA ---
 @admin_bp.route('/ranking', methods=['GET'])
 def obtener_ranking():
     try:
         ponencias = Ponencia.query.all()
+        evaluaciones = Evaluacion.query.all()
+        estudiantes = Estudiante.query.all()
+
+        # Agrupamos evaluaciones por ponencia en memoria
+        evals_por_ponencia = {}
+        for ev in evaluaciones:
+            if ev.ponencia_id not in evals_por_ponencia:
+                evals_por_ponencia[ev.ponencia_id] = []
+            evals_por_ponencia[ev.ponencia_id].append(ev)
+
+        # Agrupamos estudiantes por título en memoria
+        estudiantes_por_trabajo = {}
+        for e in estudiantes:
+            if e.nombre_trabajo not in estudiantes_por_trabajo:
+                estudiantes_por_trabajo[e.nombre_trabajo] = []
+            estudiantes_por_trabajo[e.nombre_trabajo].append(e)
+
         resultado = []
         for p in ponencias:
-            evaluaciones = Evaluacion.query.filter_by(ponencia_id=p.id).all()
+            evaluaciones_db = evals_por_ponencia.get(p.id, [])
             total_score = 0
-            num_evals = len(evaluaciones)
-            for ev in evaluaciones:
+            num_evals = len(evaluaciones_db)
+            
+            for ev in evaluaciones_db:
                 resp = ev.respuestas_rubrica
                 try:
                     score = int(resp.get('q6', 0)) + int(resp.get('q7', 0)) + int(resp.get('q8', 0)) + int(resp.get('q9', 0)) + int(resp.get('q10', 0))
@@ -483,8 +496,8 @@ def obtener_ranking():
                     pass
             promedio = (total_score / num_evals) if num_evals > 0 else 0
             
-            estudiantes = Estudiante.query.filter_by(nombre_trabajo=p.titulo).all()
-            nombres = " | ".join([e.nombres_apellidos for e in estudiantes]) if estudiantes else "N/A"
+            integrantes_db = estudiantes_por_trabajo.get(p.titulo, [])
+            nombres = " | ".join([e.nombres_apellidos for e in integrantes_db]) if integrantes_db else "N/A"
             
             resultado.append({
                 "id": p.id,
@@ -500,7 +513,6 @@ def obtener_ranking():
     except Exception as e:
         return jsonify({"error": f"Error al calcular ranking: {str(e)}"}), 500
 
-# --- ELIMINAR PONENCIA COMPLETA ---
 @admin_bp.route('/ponencias/<int:id>', methods=['DELETE'])
 def eliminar_ponencia(id):
     try:
@@ -538,7 +550,6 @@ def eliminar_evaluador(id):
         db.session.rollback()
         return jsonify({"error": f"Error al eliminar: {str(e)}"}), 500
 
-# --- ELIMINAR TODOS ---
 @admin_bp.route('/borrar_todos/<entidad>', methods=['DELETE'])
 def borrar_todos(entidad):
     try:
@@ -563,7 +574,7 @@ def borrar_todos(entidad):
         db.session.rollback()
         return jsonify({"error": f"Error al vaciar registros: {str(e)}"}), 500
 
-# --- EXPORTAR A EXCEL ---
+# --- EXCEL OPTIMIZADO PARA CONSULTAS N+1 ---
 @admin_bp.route('/exportar/<entidad>', methods=['GET'])
 def exportar_excel(entidad):
     try:
@@ -586,10 +597,17 @@ def exportar_excel(entidad):
         elif entidad == 'ponencias':
             ws.title = "Ponencias"
             ponencias = Ponencia.query.all()
+            estudiantes = Estudiante.query.all()
+            
+            est_por_trabajo = {}
+            for e in estudiantes:
+                if e.nombre_trabajo not in est_por_trabajo:
+                    est_por_trabajo[e.nombre_trabajo] = []
+                est_por_trabajo[e.nombre_trabajo].append(e)
+
             ws.append(['ID', 'Título', 'Estado', 'Código', 'URL QR', 'Integrantes'])
             for p in ponencias:
-                estudiantes = Estudiante.query.filter_by(nombre_trabajo=p.titulo).all()
-                nombres = " | ".join([e.nombres_apellidos for e in estudiantes])
+                nombres = " | ".join([e.nombres_apellidos for e in est_por_trabajo.get(p.titulo, [])])
                 ws.append([p.id, p.titulo, p.estado, p.codigo or 'N/A', p.url_qr or 'N/A', nombres])
             filename = "Listado_Ponencias.xlsx"
         elif entidad == 'evaluaciones':
@@ -622,7 +640,6 @@ def exportar_excel(entidad):
     except Exception as e:
         return jsonify({"error": f"Error al generar Excel: {str(e)}"}), 500
 
-# --- ACEPTAR PONENCIA INDIVIDUAL Y GENERAR QR ---
 @admin_bp.route('/aceptar_ponencia/<int:id_ponencia>', methods=['POST'])
 def aceptar_ponencia(id_ponencia):
     ponencia = Ponencia.query.get(id_ponencia)
@@ -657,7 +674,6 @@ def aceptar_ponencia(id_ponencia):
         db.session.rollback()
         return jsonify({"error": f"Error al procesar la ponencia: {str(e)}"}), 500
 
-# --- CARGA MASIVA MEDIANTE EXCEL ---
 @admin_bp.route('/cargar_excel', methods=['POST'])
 def cargar_excel():
     if 'file' not in request.files:
@@ -745,7 +761,6 @@ def cargar_excel():
         db.session.rollback()
         return jsonify({"error": f"Error procesando el archivo. Detalle: {str(e)}"}), 500
 
-# --- ENVÍO DE CORREOS MASIVOS (USANDO HILOS Y SSL) ---
 @admin_bp.route('/enviar_qrs', methods=['POST'])
 def enviar_qrs():
     data = request.get_json() or {}
