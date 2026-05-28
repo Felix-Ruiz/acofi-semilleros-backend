@@ -228,7 +228,8 @@ def editar_estudiante(id):
                 db.session.add(ponencia_nueva)
                 db.session.flush()
                 
-                url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia_nueva.codigo}"
+                # ⚠️ 1. SOLUCIÓN QR REDIRECCIÓN DIRECTA
+                url_evaluacion = f"{DOMINIO_PRODUCCION}/login?redirect=/evaluar/{ponencia_nueva.codigo}"
                 qr = qrcode.make(url_evaluacion)
                 ruta_temporal = f"qr_{ponencia_nueva.codigo}.png"
                 qr.save(ruta_temporal)
@@ -645,7 +646,8 @@ def aceptar_ponencia(id_ponencia):
                     ponencia.codigo = codigo_generado
                     break
                     
-        url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
+        # ⚠️ 2. SOLUCIÓN QR REDIRECCIÓN DIRECTA
+        url_evaluacion = f"{DOMINIO_PRODUCCION}/login?redirect=/evaluar/{ponencia.codigo}"
         qr = qrcode.make(url_evaluacion)
         
         ruta_temporal = f"qr_{ponencia.codigo}.png"
@@ -661,7 +663,7 @@ def aceptar_ponencia(id_ponencia):
         db.session.rollback()
         return jsonify({"error": f"Error al procesar la ponencia: {str(e)}"}), 500
 
-# ⚠️ PROCESADOR DE EXCEL BLINDADO FILA POR FILA (NUNCA OMITE)
+# ⚠️ 3. PROCESADOR DE EXCEL BLINDADO (NO OMITE A NADIE)
 @admin_bp.route('/cargar_excel', methods=['POST'])
 def cargar_excel():
     if 'file' not in request.files:
@@ -686,28 +688,33 @@ def cargar_excel():
         col_titulo = next((c for c in df.columns if 'trabajo' in str(c).lower()), None) or 'Nombre del trabajo que representa (debe ser el mismo enviado en la carta de notificación del paso a la tercera fase).'
         col_codigo = next((c for c in df.columns if 'código' in str(c).lower() or 'codigo' in str(c).lower()), None) or 'Código'
 
-        # ⚠️ Procesamos fila por fila para que un error en un estudiante no aborte el archivo entero
+        # Procesamos fila por fila para que un error en un estudiante no aborte el archivo entero
         for index, row in df.iterrows():
             try:
                 nombres = str(row.get(col_nombres, '')).strip()
                 if not nombres or nombres.lower() == 'nan': continue
 
                 documento = str(row.get(col_doc, '')).replace('.0', '').strip()
+                # ⚠️ ESCUDO DE DOCUMENTO: Si no tiene documento, le asignamos uno temporal
+                if not documento or documento.lower() == 'nan':
+                    documento = f"SD-{random.randint(10000, 99999)}"
+                
                 institucion = str(row.get(col_inst, '')).strip()
+                
                 correo = str(row.get(col_correo, '')).strip()
+                # ⚠️ ESCUDO DE CORREO: Si no tiene correo, le damos uno temporal
+                if not correo or correo.lower() == 'nan':
+                    correo = f"{documento}@acofi.edu.co"
+                
                 ciudad = str(row.get(col_ciudad, '')).strip()
                 cargo = str(row.get(col_cargo, '')).strip()
                 titulo = str(row.get(col_titulo, '')).strip()
                 codigo_excel = str(row.get(col_codigo, '')).replace('.0', '').strip()
-                
-                # Salvavidas para datos vacíos que causaban errores
-                if not documento: documento = "SD-" + ''.join(random.choices(string.digits, k=6))
-                if not correo: correo = f"sincorreo_{documento}@acofi.edu.co"
 
-                # Verificamos si este correo ya lo usa otro (para evitar que se omitan)
+                # ⚠️ ESCUDO ANTI-OMISIONES: Si el correo ya existe en otro estudiante, lo volvemos único
                 exist_email = Estudiante.query.filter_by(correo=correo).first()
                 if exist_email and exist_email.documento_identidad != documento:
-                    correo = f"dup_{documento}_{correo}"
+                    correo = f"{documento}_{correo}"
 
                 estudiante = Estudiante.query.filter_by(documento_identidad=documento).first()
                 if not estudiante:
@@ -752,7 +759,8 @@ def cargar_excel():
                     db.session.add(ponencia)
                     db.session.flush()
 
-                    url_evaluacion = f"{DOMINIO_PRODUCCION}/evaluar/{ponencia.codigo}"
+                    # ⚠️ 3. SOLUCIÓN QR REDIRECCIÓN DIRECTA (DENTRO DEL EXCEL)
+                    url_evaluacion = f"{DOMINIO_PRODUCCION}/login?redirect=/evaluar/{ponencia.codigo}"
                     qr = qrcode.make(url_evaluacion)
                     ruta_temporal = f"qr_excel_{ponencia.codigo}.png"
                     qr.save(ruta_temporal)
