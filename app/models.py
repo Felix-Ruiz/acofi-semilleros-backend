@@ -3,6 +3,12 @@ from datetime import datetime
 
 db = SQLAlchemy()
 
+# ⚠️ TABLA INTERMEDIA PARA ASIGNAR PONENCIAS
+asignaciones = db.Table('asignaciones',
+    db.Column('evaluador_id', db.Integer, db.ForeignKey('evaluadores.id'), primary_key=True),
+    db.Column('ponencia_id', db.Integer, db.ForeignKey('ponencias.id'), primary_key=True)
+)
+
 class Administrador(db.Model):
     __tablename__ = 'administradores'
     id = db.Column(db.Integer, primary_key=True)
@@ -12,7 +18,7 @@ class Administrador(db.Model):
 class Evento(db.Model):
     __tablename__ = 'eventos'
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(150), nullable=False) # Ej: Barranquilla, Atlántico
+    nombre = db.Column(db.String(150), nullable=False)
     fecha = db.Column(db.Date, nullable=False)
     evaluadores = db.relationship('Evaluador', backref='evento', lazy=True)
 
@@ -27,10 +33,7 @@ class Estudiante(db.Model):
     cargo = db.Column(db.String(50), nullable=False)
     nombre_trabajo = db.Column(db.String(300), nullable=False)
     pin_acceso = db.Column(db.String(20), nullable=True)
-    
-    # ⚠️ NUEVA COLUMNA DE ASISTENCIA AÑADIDA
     asistencia = db.Column(db.Boolean, default=False)
-    
     ponencia = db.relationship('Ponencia', backref='estudiante', uselist=False)
 
 class Evaluador(db.Model):
@@ -44,15 +47,17 @@ class Evaluador(db.Model):
     evento_id = db.Column(db.Integer, db.ForeignKey('eventos.id'), nullable=False)
     pin_acceso = db.Column(db.String(20), nullable=True)
     evaluaciones = db.relationship('Evaluacion', backref='evaluador', lazy=True)
+    # ⚠️ Relación de asignaciones
+    ponencias_asignadas = db.relationship('Ponencia', secondary=asignaciones, lazy='subquery', backref=db.backref('evaluadores_asignados', lazy=True))
 
 class Ponencia(db.Model):
     __tablename__ = 'ponencias'
     id = db.Column(db.Integer, primary_key=True)
     estudiante_id = db.Column(db.Integer, db.ForeignKey('estudiantes.id'), nullable=False)
     titulo = db.Column(db.String(300), nullable=False)
-    estado = db.Column(db.String(20), default='pendiente') # pendiente, aceptada, rechazada
-    codigo = db.Column(db.String(3), unique=True, nullable=True) # Los 3 números automáticos
-    url_qr = db.Column(db.String(300), nullable=True) # Ruta de la imagen del QR
+    estado = db.Column(db.String(20), default='pendiente')
+    codigo = db.Column(db.String(3), unique=True, nullable=True) 
+    url_qr = db.Column(db.String(300), nullable=True) 
     evaluaciones = db.relationship('Evaluacion', backref='ponencia', lazy=True)
 
 class Evaluacion(db.Model):

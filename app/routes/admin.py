@@ -71,7 +71,8 @@ def proceso_envio_segundo_plano(lista_datos):
     remitente_oficial = os.environ.get('MAIL_SENDER', 'semilleros@acofiapps.com').strip()
     url = "https://api.brevo.com/v3/smtp/email"
 
-    if not api_key: return
+    if not api_key:
+        return
 
     headers = {
         "accept": "application/json",
@@ -197,7 +198,6 @@ def toggle_asistencia(id):
         db.session.commit()
         
         mensaje_extra = ""
-        # ⚠️ SOLUCIÓN: Envío automático de credencial al marcar asistencia = True
         if nuevo_estado:
             p = Ponencia.query.filter_by(titulo=estudiante.nombre_trabajo).first()
             if p and p.url_qr and estudiante.correo:
@@ -207,6 +207,7 @@ def toggle_asistencia(id):
                     <h2 style="color: #1e3a8a;">Hola {estudiante.nombres_apellidos},</h2>
                     <p>Aquí tienes tu credencial de acceso para tu proyecto <strong>"{p.titulo}"</strong>.</p>
                     <p>Tu código de póster asignado es: <strong style="font-size: 18px; color: #1e3a8a;">{p.codigo}</strong></p>
+                    
                     <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1e3a8a;">
                         <h3 style="margin-top: 0; color: #1e3a8a;">Credencial Digital</h3>
                         <p style="margin-bottom: 10px;">Ingresa a la plataforma para ver tu QR el día del evento:</p>
@@ -216,6 +217,7 @@ def toggle_asistencia(id):
                             <li>🔑 <strong>Contraseña (PIN):</strong> {estudiante.pin_acceso}</li>
                         </ul>
                     </div>
+                    
                     <div style="text-align: center; margin: 20px 0;">
                         <img src="{p.url_qr}" alt="QR" style="width:200px; height:200px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px;">
                     </div>
@@ -263,13 +265,13 @@ def editar_estudiante(id):
                 db.session.add(ponencia_nueva)
                 db.session.flush()
                 
-                # ⚠️ SOLUCIÓN: Redirección directa en el QR editado
                 url_evaluacion = f"{DOMINIO_PRODUCCION}/login?redirect=/evaluar/{ponencia_nueva.codigo}"
                 qr = qrcode.make(url_evaluacion)
                 ruta_temporal = f"qr_{ponencia_nueva.codigo}.png"
                 qr.save(ruta_temporal)
                 upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
                 ponencia_nueva.url_qr = upload_result.get("secure_url")
+                
                 if os.path.exists(ruta_temporal):
                     os.remove(ruta_temporal)
                     
@@ -438,6 +440,8 @@ def obtener_evaluadores():
         evaluadores = Evaluador.query.all()
         resultado = []
         for e in evaluadores:
+            # ⚠️ NUEVO: Enviar asignaciones
+            asignadas = [p.codigo for p in e.ponencias_asignadas] if hasattr(e, 'ponencias_asignadas') else []
             resultado.append({
                 "id": e.id,
                 "nombres_apellidos": e.nombres_apellidos,
@@ -447,7 +451,8 @@ def obtener_evaluadores():
                 "cargo": e.cargo,
                 "evento_id": e.evento_id,
                 "evento": e.evento.nombre if e.evento else "N/A",
-                "pin_acceso": e.pin_acceso
+                "pin_acceso": e.pin_acceso,
+                "ponencias_asignadas": asignadas
             })
         return jsonify(resultado), 200
     except Exception as e:
@@ -517,7 +522,12 @@ def obtener_ranking():
             total_score = 0
             num_evals = len(evaluaciones_db)
             
+            # ⚠️ NUEVO: Array para capturar los nombres
+            nombres_evaluadores = []
+            
             for ev in evaluaciones_db:
+                if ev.evaluador:
+                    nombres_evaluadores.append(ev.evaluador.nombres_apellidos)
                 resp = ev.respuestas_rubrica
                 try:
                     score = int(resp.get('q6', 0)) + int(resp.get('q7', 0)) + int(resp.get('q8', 0)) + int(resp.get('q9', 0)) + int(resp.get('q10', 0))
@@ -536,7 +546,8 @@ def obtener_ranking():
                 "estudiante_nombre": nombres,
                 "num_evaluaciones": num_evals,
                 "puntaje_total": total_score,
-                "promedio": round(promedio, 2)
+                "promedio": round(promedio, 2),
+                "evaluadores_nombres": nombres_evaluadores # ⚠️ Mandamos el dato al Front
             })
         resultado = sorted(resultado, key=lambda x: x['promedio'], reverse=True)
         return jsonify(resultado), 200
@@ -573,6 +584,10 @@ def eliminar_evaluador(id):
         if not evaluador:
             return jsonify({"error": "Evaluador no encontrado"}), 404
         Evaluacion.query.filter_by(evaluador_id=id).delete()
+        
+        # ⚠️ NUEVO: Limpiamos asignaciones
+        evaluador.ponencias_asignadas = []
+        
         db.session.delete(evaluador)
         db.session.commit()
         return jsonify({"mensaje": "Evaluador eliminado correctamente"}), 200
@@ -587,10 +602,13 @@ def borrar_todos(entidad):
             ponencias = Ponencia.query.all()
             for p in ponencias:
                 eliminar_qr_cloudinary(p.url_qr)
+            # ⚠️ Limpiar asignaciones
+            db.session.execute('DELETE FROM asignaciones')
             Evaluacion.query.delete()
             Ponencia.query.delete()
             Estudiante.query.delete()
         elif entidad == 'evaluadores':
+            db.session.execute('DELETE FROM asignaciones')
             evaluadores = Evaluador.query.all()
             for ev in evaluadores:
                 Evaluacion.query.filter_by(evaluador_id=ev.id).delete()
@@ -703,7 +721,7 @@ def aceptar_ponencia(id_ponencia):
                     ponencia.codigo = codigo_generado
                     break
                     
-        # ⚠️ SOLUCIÓN: Redirección directa en el QR aceptado
+        # ⚠️ INCORPORACIÓN DEL REDIRECT AL QR DIRECTAMENTE
         url_evaluacion = f"{DOMINIO_PRODUCCION}/login?redirect=/evaluar/{ponencia.codigo}"
         qr = qrcode.make(url_evaluacion)
         
@@ -734,10 +752,8 @@ def cargar_excel():
         else:
             df = pd.read_excel(file)
 
-        # Reemplazamos todos los vacíos para que no salgan como "N/A"
         df = df.fillna('')
         
-        # Buscadores de columnas dinámicos para evitar errores de tipeo en el Excel
         col_nombres = next((c for c in df.columns if 'nombre y apellido' in str(c).lower()), None) or 'Nombre y apellidos'
         col_doc = next((c for c in df.columns if 'documento' in str(c).lower()), None) or 'Número de documento de identidad'
         col_inst = next((c for c in df.columns if 'institución' in str(c).lower() or 'institucion' in str(c).lower()), None) or 'Institución'
@@ -747,7 +763,6 @@ def cargar_excel():
         col_titulo = next((c for c in df.columns if 'trabajo' in str(c).lower()), None) or 'Nombre del trabajo que representa (debe ser el mismo enviado en la carta de notificación del paso a la tercera fase).'
         col_codigo = next((c for c in df.columns if 'código' in str(c).lower() or 'codigo' in str(c).lower()), None) or 'Código'
 
-        # Procesamos fila por fila para que un error en un estudiante no aborte el archivo entero
         for index, row in df.iterrows():
             try:
                 nombres = str(row.get(col_nombres, '')).strip()
@@ -762,13 +777,11 @@ def cargar_excel():
                 titulo = str(row.get(col_titulo, '')).strip()
                 codigo_excel = str(row.get(col_codigo, '')).replace('.0', '').strip()
                 
-                # ⚠️ SOLUCIÓN ANTI-OMISIÓN: Salvavidas para datos vacíos que causaban errores
                 if not documento or documento.lower() == 'nan':
                     documento = "SD-" + ''.join(random.choices(string.digits, k=6))
                 if not correo or correo.lower() == 'nan':
                     correo = f"sincorreo_{documento}@acofi.edu.co"
 
-                # ⚠️ SOLUCIÓN ANTI-OMISIÓN: Verificamos si este correo ya lo usa otro (para evitar duplicados en BD)
                 exist_email = Estudiante.query.filter_by(correo=correo).first()
                 if exist_email and exist_email.documento_identidad != documento:
                     correo = f"dup_{documento}_{correo}"
@@ -787,11 +800,10 @@ def cargar_excel():
                         asistencia=False
                     )
                     db.session.add(estudiante)
-                    db.session.flush() # Guarda temporalmente para darle un ID
+                    db.session.flush() 
                 else:
-                    estudiante.nombre_trabajo = titulo # Si ya existe, solo actualizamos el trabajo
+                    estudiante.nombre_trabajo = titulo 
 
-                # PONENCIAS
                 ponencia = None
                 if codigo_excel and codigo_excel.lower() != 'nan':
                     ponencia = Ponencia.query.filter_by(codigo=codigo_excel).first()
@@ -816,22 +828,19 @@ def cargar_excel():
                     db.session.add(ponencia)
                     db.session.flush()
 
-                    # ⚠️ SOLUCIÓN QR REDIRECCIÓN DIRECTA DENTRO DEL EXCEL
                     url_evaluacion = f"{DOMINIO_PRODUCCION}/login?redirect=/evaluar/{ponencia.codigo}"
                     qr = qrcode.make(url_evaluacion)
                     ruta_temporal = f"qr_excel_{ponencia.codigo}.png"
                     qr.save(ruta_temporal)
                     upload_result = cloudinary.uploader.upload(ruta_temporal, folder="qrs_acofi")
                     ponencia.url_qr = upload_result.get("secure_url")
-                    
                     if os.path.exists(ruta_temporal):
                         os.remove(ruta_temporal)
                 
-                # GUARDAMOS ESTA FILA. Si la siguiente falla, esta ya quedó a salvo.
                 db.session.commit()
             except Exception as e_row:
                 db.session.rollback()
-                print(f"Error forzado al saltar en fila {index}: {str(e_row)}")
+                pass
 
         return jsonify({"mensaje": "Archivo procesado. Estudiantes y ponencias guardados exitosamente."}), 200
     except Exception as e:
@@ -872,3 +881,66 @@ def enviar_qrs():
         return jsonify({"mensaje": f"El envío masivo a {len(lista_envio)} estudiantes se ha iniciado en segundo plano. Puede continuar usando el sistema."}), 200
     except Exception as e:
         return jsonify({"error": f"Error al iniciar envíos: {str(e)}"}), 500
+
+# ⚠️ NUEVAS RUTAS DE ASIGNACIÓN A EVALUADORES CON SOPORTE CORS (OPTIONS)
+@admin_bp.route('/evaluadores/<int:id>/asignar', methods=['POST', 'OPTIONS'])
+def asignar_ponencias_evaluador(id):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
+    data = request.get_json()
+    ponencias_codigos = data.get('ponencias_codigos', [])
+    try:
+        evaluador = Evaluador.query.get(id)
+        if not evaluador: return jsonify({"error": "Evaluador no encontrado"}), 404
+
+        ponencias_db = Ponencia.query.filter(Ponencia.codigo.in_(ponencias_codigos)).all()
+        evaluador.ponencias_asignadas = ponencias_db
+        db.session.commit()
+
+        if evaluador.correo:
+            lista_proyectos = "".join([f"<li><strong>{p.codigo}:</strong> {p.titulo}</li>" for p in ponencias_db])
+            asunto = "Asignación de Proyectos a Evaluar - ACOFI 2026"
+            cuerpo = f"""
+            <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
+                <h2 style="color: #1e3a8a;">Hola {evaluador.nombres_apellidos},</h2>
+                <p>Te hemos asignado los siguientes proyectos para evaluar en el I Encuentro Regional de Investigación e Innovación en Ingeniería ACOFI 2026:</p>
+                <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                    <ul style="padding-left: 20px; margin: 0;">{lista_proyectos}</ul>
+                </div>
+                <p>Puedes revisar estas asignaciones e ir tachándolas en tu Dashboard ingresando a la plataforma:</p>
+                <p>🔗 <strong>Enlace:</strong> <a href="{DOMINIO_PRODUCCION}/login">{DOMINIO_PRODUCCION}/login</a></p>
+                <p><strong>Documento:</strong> {evaluador.documento_identidad}<br><strong>PIN:</strong> {evaluador.pin_acceso}</p>
+                <p>Saludos cordiales,<br><strong>Comité Organizador ACOFI</strong></p>
+            </div>
+            """
+            threading.Thread(target=enviar_correo, args=(evaluador.correo, asunto, cuerpo)).start()
+
+        return jsonify({"mensaje": "Asignaciones guardadas y correo enviado exitosamente"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@admin_bp.route('/evaluador_dashboard/<string:documento>', methods=['GET', 'OPTIONS'])
+def evaluador_dashboard(documento):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
+    try:
+        evaluador = Evaluador.query.filter_by(documento_identidad=documento).first()
+        if not evaluador: return jsonify({"error": "Evaluador no encontrado"}), 404
+        
+        evaluaciones_realizadas = Evaluacion.query.filter_by(evaluador_id=evaluador.id).all()
+        codigos_evaluados = [ev.ponencia.codigo for ev in evaluaciones_realizadas if ev.ponencia]
+
+        asignadas = []
+        for p in evaluador.ponencias_asignadas:
+            asignadas.append({
+                "codigo": p.codigo,
+                "titulo": p.titulo,
+                "evaluado": p.codigo in codigos_evaluados
+            })
+            
+        return jsonify({"asignaciones": asignadas}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
